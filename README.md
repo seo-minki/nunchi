@@ -1,9 +1,11 @@
-# kakaotalk-tui
+# nunchi 👀
 
-macOS용 카카오톡을 터미널에서 쓰는 비공식 클라이언트입니다.
+> 눈치 보지 말고, 터미널에서 카톡하세요.
+
+**nunchi**(눈치)는 macOS용 카카오톡을 터미널에서 쓰는 비공식 클라이언트입니다.
 실행 중인 카카오톡 앱을 **손쉬운 사용(Accessibility) API**로 읽고 조작하므로, 카카오 서버와 직접 통신하지 않습니다.
 
-![kakaotalk-tui 화면 (데모 데이터)](docs/screenshot.png)
+![nunchi 화면 (데모 데이터)](docs/screenshot.png)
 
 ## 기능
 
@@ -23,13 +25,13 @@ macOS용 카카오톡을 터미널에서 쓰는 비공식 클라이언트입니�
 ## 설치
 
 ```sh
-git clone https://github.com/seo-minki/kakaotalk-tui.git
-cd kakaotalk-tui
-./install.sh   # 빌드한 뒤 /usr/local/bin/kt 로 설치합니다 (관리자 비밀번호를 물어볼 수 있습니다)
+git clone https://github.com/seo-minki/nunchi.git
+cd nunchi
+./install.sh   # 빌드한 뒤 /usr/local/bin/nunchi 로 설치합니다 (관리자 비밀번호를 물어볼 수 있습니다)
 ```
 
 - 다른 곳에 설치하려면 `PREFIX=~/.local ./install.sh`처럼 경로를 지정하세요. 그 폴더의 `bin`이 PATH에 있어야 합니다.
-- 설치 없이 저장소 폴더에서 `./build.sh` 후 `./kt`로 실행해도 됩니다.
+- 설치 없이 저장소 폴더에서 `./build.sh` 후 `./nunchi`로 실행해도 됩니다.
 - 지우려면 `./install.sh --remove`를 실행하세요.
 - 코드를 받아 업데이트한 뒤에는 `./install.sh`를 다시 실행하세요.
 
@@ -38,7 +40,7 @@ cd kakaotalk-tui
 ## 사용법
 
 ```sh
-kt
+nunchi
 ```
 
 | 키 | 동작 |
@@ -53,7 +55,7 @@ kt
 | Ctrl+U | 입력줄 지우기 |
 | Ctrl+C | 종료 |
 
-`kt --demo`를 실행하면 카카오톡 없이 가짜 데이터로 화면을 한 번 그려 볼 수 있습니다. 위 스크린샷도 이렇게 만들었습니다.
+`nunchi --demo`를 실행하면 카카오톡 없이 가짜 데이터로 화면을 한 번 그려 볼 수 있습니다. 위 스크린샷도 이렇게 만들었습니다.
 
 카카오톡 창은 터미널 뒤에 가려 두어도 동작합니다. 카카오톡을 Cmd+H로 가려 둔 상태에서도 읽기와 보내기가 됩니다.
 

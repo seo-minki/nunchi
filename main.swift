@@ -1,4 +1,4 @@
-// kt — 실행 중인 카카오톡(macOS)을 손쉬운 사용(Accessibility) API로 읽고 쓰는 터미널 클라이언트
+// nunchi — 실행 중인 카카오톡(macOS)을 손쉬운 사용(Accessibility) API로 읽고 쓰는 터미널 클라이언트
 import Cocoa
 import ApplicationServices
 
@@ -187,7 +187,7 @@ func open(_ name: String, hint: Int?) -> AXUIElement? {
 // MARK: - 채팅방 창 위치
 // 사용자가 옮겨 둔 위치를 기억한다. 저장된 위치가 없으면 카톡 메인 창 옆에 붙인다.
 
-let positionFile = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/kt/window-position")
+let positionFile = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/nunchi/window-position")
 
 func savedPosition() -> CGPoint? {
   guard let text = try? String(contentsOf: positionFile, encoding: .utf8) else { return nil }
@@ -195,7 +195,7 @@ func savedPosition() -> CGPoint? {
   return parts.count == 2 ? CGPoint(x: parts[0], y: parts[1]) : nil
 }
 
-/// kt가 연 창을 닫기 직전에 위치를 저장한다
+/// nunchi가 연 창을 닫기 직전에 위치를 저장한다
 func rememberPosition(_ win: AXUIElement) {
   let p = node(win).frame.origin
   guard p != .zero else { return }
@@ -218,7 +218,7 @@ func placeRoomWindow(_ win: AXUIElement) {
   move(win, to: CGPoint(x: x, y: m.minY))
 }
 
-/// kt가 연 창이면 위치를 기억하고 닫는다. 사용자가 직접 열어 둔 창은 건드리지 않는다.
+/// nunchi가 연 창이면 위치를 기억하고 닫는다. 사용자가 직접 열어 둔 창은 건드리지 않는다.
 func closeOurs(_ win: AXUIElement, _ ours: Bool) {
   guard ours else { return }
   rememberPosition(win)
@@ -546,7 +546,7 @@ signal(SIGTERM) { _ in quit() }
 // 카톡 AX 작업은 전부 ax 큐 하나에서 차례로 돌리고, 화면·키 입력은 메인 스레드가 맡는다.
 // 공유 상태는 lock으로 보호한다.
 
-let ax = DispatchQueue(label: "kt.ax")
+let ax = DispatchQueue(label: "nunchi.ax")
 let lock = NSLock()
 func locked<T>(_ f: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return f() }
 
@@ -822,7 +822,7 @@ func draw() {
   if currentName != nil { right = Array(repeating: "", count: bodyH - right.count) + right }
 
   var s = "\u{1B}[H"
-  let title = currentName.map { "\(bold)\($0)\(reset)" } ?? "\(dim)kt\(reset)"
+  let title = currentName.map { "\(bold)\($0)\(reset)" } ?? "\(dim)nunchi\(reset)"
   s += "\(dim)\(fit(" sessions", leftW))\(reset) │ \(title)\u{1B}[K\r\n"
   for i in 0..<bodyH {
     let l = i < left.count ? left[i] : String(repeating: " ", count: leftW)

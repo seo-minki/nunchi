@@ -4,20 +4,20 @@ AI 코딩 에이전트가 이 저장소에서 작업할 때 참고할 내용입�
 
 ## 프로젝트 개요
 
-- macOS용 카카오톡을 터미널에서 쓰는 TUI 클라이언트입니다. 실행 명령은 `kt`입니다.
+- macOS용 카카오톡을 터미널에서 쓰는 TUI 클라이언트입니다. 실행 명령은 `nunchi`입니다.
 - 카카오 서버와 통신하지 않습니다. 실행 중인 카카오톡 앱을 **손쉬운 사용(Accessibility) API**로 읽고, **키보드 이벤트**로 조작합니다.
 - 외부 의존성 없이 `main.swift` 파일 하나로 되어 있습니다. 확인한 환경은 카카오톡 26.8.0, macOS 26.6.2입니다.
 
 ## 빌드와 실행
 
 ```sh
-./build.sh     # swiftc -O -suppress-warnings main.swift -o kt
-./kt
-./install.sh   # 빌드 + $PREFIX/bin/kt 로 복사 (기본 /usr/local, --remove로 삭제)
-./kt --demo    # 카톡 없이 가짜 데이터로 화면을 한 번 그리고 종료 (README 스크린샷용)
+./build.sh     # swiftc -O -suppress-warnings main.swift -o nunchi
+./nunchi
+./install.sh   # 빌드 + $PREFIX/bin/nunchi 로 복사 (기본 /usr/local, --remove로 삭제)
+./nunchi --demo    # 카톡 없이 가짜 데이터로 화면을 한 번 그리고 종료 (README 스크린샷용)
 ```
 
-- `docs/screenshot.png`는 `kt --demo` 출력을 HTML로 바꿔 D2Coding 폰트로 크롬 헤드리스 스크린샷을 찍어 만들었습니다. 실제 대화가 담긴 화면을 저장소에 올리지 마세요.
+- `docs/screenshot.png`는 `nunchi --demo` 출력을 HTML로 바꿔 D2Coding 폰트로 크롬 헤드리스 스크린샷을 찍어 만들었습니다. 실제 대화가 담긴 화면을 저장소에 올리지 마세요.
 
 - Swift 6 동시성 경고는 Swift 5 모드에서는 무해해서 숨기고 있습니다.
 - 실행하는 터미널 앱에 손쉬운 사용 권한이 있어야 합니다.
@@ -30,7 +30,7 @@ AI 코딩 에이전트가 이 저장소에서 작업할 때 참고할 내용입�
 | AX 헬퍼 | `attr`, `kids`, `find`, `node`(속성 여러 개를 요청 한 번으로 가져옴) |
 | 카카오톡 연결 | `windows`, `mainWindow`, `roomWindow`, `mainTable`(캐시) |
 | 채팅방 목록 | `room`, `rowName`, `focus`, `open` |
-| 채팅방 창 위치 | `placeRoomWindow`, `rememberPosition` (`~/.config/kt/window-position`) |
+| 채팅방 창 위치 | `placeRoomWindow`, `rememberPosition` (`~/.config/nunchi/window-position`) |
 | 메시지 | `chatRows`, `messages`, `merge` |
 | 전송·언급 | `type`, `send`, `pieces`, `typeMention` |
 | 터미널 | raw 모드, 문자 폭(한글·이모지 2칸), `fit`, `wrap` |
@@ -107,7 +107,7 @@ AI 코딩 에이전트가 이 저장소에서 작업할 때 참고할 내용입�
 
 **권장 테스트 방식**
 - `main.swift`의 필요한 구역을 잘라 붙인 작은 Swift 스크립트를 따로 만들어 확인합니다.
-- 화면 확인은 의사 터미널(Python `pty`)로 `kt`를 띄워 출력을 캡처합니다.
+- 화면 확인은 의사 터미널(Python `pty`)로 `nunchi`를 띄워 출력을 캡처합니다.
 
 ## 코드 스타일
 
