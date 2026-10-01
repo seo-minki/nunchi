@@ -14,7 +14,10 @@ AI 코딩 에이전트가 이 저장소에서 작업할 때 참고할 내용입�
 ./build.sh     # swiftc -O -suppress-warnings main.swift -o kt
 ./kt
 ./install.sh   # 빌드 + $PREFIX/bin/kt 로 복사 (기본 /usr/local, --remove로 삭제)
+./kt --demo    # 카톡 없이 가짜 데이터로 화면을 한 번 그리고 종료 (README 스크린샷용)
 ```
+
+- `docs/screenshot.png`는 `kt --demo` 출력을 HTML로 바꿔 D2Coding 폰트로 크롬 헤드리스 스크린샷을 찍어 만들었습니다. 실제 대화가 담긴 화면을 저장소에 올리지 마세요.
 
 - Swift 6 동시성 경고는 Swift 5 모드에서는 무해해서 숨기고 있습니다.
 - 실행하는 터미널 앱에 손쉬운 사용 권한이 있어야 합니다.

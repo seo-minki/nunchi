@@ -61,10 +61,13 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-guard AXIsProcessTrusted() else {
+// --demo: 카톡에 연결하지 않고 가짜 데이터로 화면을 한 번 그린다 (README 스크린샷용)
+let demo = CommandLine.arguments.contains("--demo")
+guard demo || AXIsProcessTrusted() else {
   die("손쉬운 사용 권한이 필요합니다: 시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용에서 터미널 앱을 켜 주세요.")
 }
-guard let kakao = NSRunningApplication.runningApplications(withBundleIdentifier: "com.kakao.KakaoTalkMac").first else {
+guard let kakao = NSRunningApplication.runningApplications(withBundleIdentifier: "com.kakao.KakaoTalkMac").first
+        ?? (demo ? NSRunningApplication.current : nil) else {
   die("카카오톡이 실행 중이 아닙니다.")
 }
 let app = AXUIElementCreateApplication(kakao.processIdentifier)
@@ -529,7 +532,9 @@ func restore() {
   out("\u{1B}[?1049l")
 }
 func out(_ s: String) { FileHandle.standardOutput.write(s.data(using: .utf8)!) }
+var fixedSize: (rows: Int, cols: Int)?   // 데모처럼 터미널 크기와 상관없이 그릴 때
 func termSize() -> (rows: Int, cols: Int) {
+  if let fixedSize { return fixedSize }
   var ws = winsize()
   _ = ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws)
   return (max(Int(ws.ws_row), 10), max(Int(ws.ws_col), 60))
@@ -905,8 +910,35 @@ func enter() {
   }
 }
 
+// MARK: - 데모
+
+func runDemo() -> Never {
+  fixedSize = (rows: 20, cols: 96)
+  roomList = [
+    Room(name: "개발 스터디", unread: 0), Room(name: "김철수", unread: 2), Room(name: "주말 등산 모임", unread: 12),
+    Room(name: "가족", unread: 0), Room(name: "이영희", unread: 0), Room(name: "회사 동기", unread: 5),
+    Room(name: "나와의 채팅", unread: 0), Room(name: "박민수", unread: 0), Room(name: "대학 동아리", unread: 128),
+    Room(name: "최지우", unread: 0), Room(name: "택배 알림", unread: 1),
+  ]
+  cursor = 0
+  currentName = "개발 스터디"
+  chat = [
+    Message(sender: "김철수", time: "11:52", body: "오늘 스터디 몇 시에 시작해요?", mine: false),
+    Message(sender: "이영희", time: "11:53", body: "저녁 8시요! 장소는 지난번이랑 같아요", mine: false),
+    Message(sender: "나", time: "11:55", body: "저 발표 자료 거의 다 만들었어요", mine: true),
+    Message(sender: "나", time: "11:55", body: "터미널에서 카톡 보내는 거 데모로 보여 드릴게요 🙂", mine: true, unread: 1),
+    Message(sender: "김철수", time: "11:58", body: "오 기대된다 ㅋㅋ\n혹시 노트북 충전기 있으신 분?", mine: false, unread: 2),
+  ]
+  inputBuf = Array("@영희 충전기 제가 챙겨 갈게요")
+  out("\u{1B}[?25l")   // 커서 숨김
+  draw()
+  out("\u{1B}[0m\r\n")
+  exit(0)
+}
+
 // MARK: - main
 
+if demo { runDemo() }
 rawMode()
 locked { draw() }
 ax.async { refreshOnce() }
