@@ -561,6 +561,9 @@ var inputBuf: [Character] = []
 var status = ""
 var busy = false                     // 방 열기·전송 중
 var dirty = true                     // 다시 그려야 함
+var scrollBack = 0                   // 대화 칸을 맨 아래에서 몇 줄 위로 올려 보고 있는지
+var lastChatLines = 0                // 직전에 그린 대화 줄 수 (새 메시지가 와도 보던 위치를 유지하려고)
+var newBelow = false                 // 올려 보는 동안 아래에 새 메시지가 왔는지
 var listRows = 30                    // 왼쪽 목록에 보이는 줄 수
 
 func setStatus(_ s: String) { locked { status = s; dirty = true } }
@@ -689,6 +692,7 @@ func openRoom(_ name: String) {
   let msgs = messages(win)
   locked {
     currentWin = win; currentName = name; openedByUs = !existed
+    scrollBack = 0; lastChatLines = 0; newBelow = false
     chat = msgs; busy = false; status = ""; dirty = true
     if let i = roomList.firstIndex(where: { $0.name == name }) { cursor = i }
   }
@@ -697,13 +701,25 @@ func openRoom(_ name: String) {
 
 /// "/이름"으로 전체 목록에서 방을 찾아 연다
 func search(_ query: String) {
-  let names = locked { nameIndex + roomList.map(\.name) }
-  var seen = Set<String>()
-  let hits = names.filter { !$0.isEmpty && $0.localizedCaseInsensitiveContains(query) && seen.insert($0).inserted }
+  func matches(_ names: [String]) -> [String] {
+    var seen = Set<String>()
+    return names.filter { !$0.isEmpty && $0.localizedCaseInsensitiveContains(query) && seen.insert($0).inserted }
+  }
+  var hits = matches(locked { nameIndex + roomList.map(\.name) })
+  // 이름 캐시가 아직 덜 찼으면 비어 있는 칸만 그 자리에서 훑는다 (몇 초 걸릴 수 있다)
+  if hits.isEmpty, locked({ nameIndex.contains("") || nameIndex.isEmpty }) {
+    setStatus("'\(query)' 찾는 중…")
+    let rows = mainRows()
+    var names = locked { nameIndex }
+    if names.count != rows.count { names = Array(repeating: "", count: rows.count) }
+    for i in rows.indices where names[i].isEmpty { names[i] = rowName(rows[i]) ?? "" }
+    locked { nameIndex = names }
+    hits = matches(names)
+  }
   if let exact = hits.first(where: { $0 == query }) ?? (hits.count == 1 ? hits[0] : nil) {
     openRoom(exact)
   } else if hits.isEmpty {
-    setStatus("'\(query)'와 일치하는 방이 없습니다. (방 이름을 읽는 중이면 잠시 뒤 다시 시도)")
+    setStatus("'\(query)'와 일치하는 방이 없습니다.")
   } else {
     setStatus("여러 개가 일치합니다: " + hits.prefix(4).joined(separator: ", "))
   }
@@ -756,6 +772,7 @@ func closeRoom() {
     guard let win = currentWin else { status = "열린 방이 없습니다."; dirty = true; return nil }
     let ours = openedByUs
     currentWin = nil; currentName = nil; chat = []
+    scrollBack = 0; lastChatLines = 0; newBelow = false
     status = ours ? "방을 닫았습니다. 이제 새 메시지가 읽음 처리되지 않습니다." : "직접 열어 둔 창이라 닫지 않고 연결만 끊었습니다."
     dirty = true
     return (win, ours)
@@ -818,8 +835,20 @@ func draw() {
   if currentName == nil {
     right = ["", "  \(dim)↑↓ 로 방을 고르고 Enter로 여세요. /이름 으로 검색\(reset)", "  \(dim)Ctrl+C 종료\(reset)"]
   }
-  right = Array(right.suffix(bodyH))
-  if currentName != nil { right = Array(repeating: "", count: bodyH - right.count) + right }
+  // 위로 올려 보는 중이면 새 줄이 생긴 만큼 같이 올려서 보던 위치를 유지한다
+  if currentName != nil {
+    if scrollBack > 0, right.count > lastChatLines, lastChatLines > 0 {
+      scrollBack += right.count - lastChatLines
+      newBelow = true
+    }
+    lastChatLines = right.count
+    scrollBack = min(scrollBack, max(0, right.count - bodyH))
+    if scrollBack == 0 { newBelow = false }
+    right = Array(right.dropLast(scrollBack).suffix(bodyH))
+    right = Array(repeating: "", count: bodyH - right.count) + right
+  } else {
+    right = Array(right.suffix(bodyH))
+  }
 
   var s = "\u{1B}[H"
   let title = currentName.map { "\(bold)\($0)\(reset)" } ?? "\(dim)nunchi\(reset)"
@@ -832,7 +861,8 @@ func draw() {
   let mention = mentionCandidates().map { c in
     c.names.isEmpty ? "@\(c.query): 대화에 나온 사람 중 일치 없음 (보낼 때 카톡 목록에서 찾음)" : "Tab → " + c.names.prefix(5).joined(separator: ", ")
   }
-  let hint = !status.isEmpty ? status : mention ?? (currentName == nil ? "" : "Enter 전송 · 빈 칸에서 Enter 방 이동 · /이름 검색 · @이름 언급 · Ctrl+O 카톡 창 앞으로 · Esc 방 닫기")
+  let scrolled = scrollBack > 0 ? "↑ \(scrollBack)줄 위를 보는 중 · End 맨 아래로" + (newBelow ? " · 새 메시지 있음" : "") : nil
+  let hint = !status.isEmpty ? status : mention ?? scrolled ?? (currentName == nil ? "" : "Enter 전송 · 빈 칸에서 Enter 방 이동 · /이름 검색 · @이름 언급 · Ctrl+O 카톡 창 앞으로 · Esc 방 닫기")
   s += "\(dim)\(String(repeating: "─", count: leftW + 1))┴─ \(fit(hint, rightW - 1))\(reset)\u{1B}[K\r\n"
 
   // 입력줄: 오른쪽 끝이 넘치면 뒷부분만 보여준다
@@ -854,13 +884,27 @@ func handle(_ bytes: [UInt8]) {
     switch b {
     case 3: shutdown()                                    // Ctrl+C
     case 27:
-      if i + 2 < bytes.count, bytes[i + 1] == 91, bytes[i + 2] == 65 || bytes[i + 2] == 66 {  // ESC [ A/B
-        let dir = bytes[i + 2]
+      // ESC [ … 끝글자 형태의 키 (화살표, PageUp 등)
+      if i + 1 < bytes.count, bytes[i + 1] == 91 {
+        var j = i + 2
+        while j < bytes.count, !(0x40...0x7E).contains(bytes[j]) { j += 1 }
+        guard j < bytes.count else { return }
+        let seq = String(decoding: bytes[(i + 2)...j], as: UTF8.self)
+        let page = max(1, (termSize().rows - 3) / 2)
         locked {
-          if dir == 65 { cursor = max(0, cursor - 1) }
-          if dir == 66 { cursor = min(roomList.count - 1, cursor + 1) }
+          switch seq {
+          case "A": cursor = max(0, cursor - 1)                          // ↑ 방 고르기
+          case "B": cursor = min(roomList.count - 1, cursor + 1)         // ↓
+          case "1;2A": scrollBack += 3                                   // Shift+↑ 대화 위로
+          case "1;2B": scrollBack = max(0, scrollBack - 3)               // Shift+↓
+          case "5~": scrollBack += page                                  // PageUp (fn+↑)
+          case "6~": scrollBack = max(0, scrollBack - page)              // PageDown (fn+↓)
+          case "F", "4~", "8~": scrollBack = 0                           // End (fn+→)
+          default: break
+          }
+          dirty = true
         }
-        i += 3; continue
+        i = j + 1; continue
       }
       if bytes.count == 1 { closeRoom(); return }         // Esc 단독: 방 닫기
       return   // 그 밖의 ESC 시퀀스는 무시한다
