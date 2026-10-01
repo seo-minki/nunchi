@@ -561,6 +561,7 @@ var inputBuf: [Character] = []
 var status = ""
 var busy = false                     // 방 열기·전송 중
 var dirty = true                     // 다시 그려야 함
+var showHelp = false                 // "/?"로 연 단축키 목록
 var scrollBack = 0                   // 대화 칸을 맨 아래에서 몇 줄 위로 올려 보고 있는지
 var lastChatLines = 0                // 직전에 그린 대화 줄 수 (새 메시지가 와도 보던 위치를 유지하려고)
 var newBelow = false                 // 올려 보는 동안 아래에 새 메시지가 왔는지
@@ -832,11 +833,10 @@ func draw() {
       for l in wrap(m.body, rightW - 2) { right.append("  \(fit(l, rightW - 2))") }
     }
   }
-  if currentName == nil {
-    right = ["", "  \(dim)↑↓ 로 방을 고르고 Enter로 여세요. /이름 으로 검색\(reset)", "  \(dim)Ctrl+C 종료\(reset)"]
-  }
+  let helpScreen = showHelp || currentName == nil
+  if helpScreen { right = helpLines() }
   // 위로 올려 보는 중이면 새 줄이 생긴 만큼 같이 올려서 보던 위치를 유지한다
-  if currentName != nil {
+  if !helpScreen {
     if scrollBack > 0, right.count > lastChatLines, lastChatLines > 0 {
       scrollBack += right.count - lastChatLines
       newBelow = true
@@ -847,7 +847,7 @@ func draw() {
     right = Array(right.dropLast(scrollBack).suffix(bodyH))
     right = Array(repeating: "", count: bodyH - right.count) + right
   } else {
-    right = Array(right.suffix(bodyH))
+    right = Array(right.prefix(bodyH))   // 단축키 목록은 위에서부터 보여준다
   }
 
   var s = "\u{1B}[H"
@@ -862,7 +862,7 @@ func draw() {
     c.names.isEmpty ? "@\(c.query): 대화에 나온 사람 중 일치 없음 (보낼 때 카톡 목록에서 찾음)" : "Tab → " + c.names.prefix(5).joined(separator: ", ")
   }
   let scrolled = scrollBack > 0 ? "↑ \(scrollBack)줄 위를 보는 중 · End 맨 아래로" + (newBelow ? " · 새 메시지 있음" : "") : nil
-  let hint = !status.isEmpty ? status : mention ?? scrolled ?? (currentName == nil ? "" : "Enter 전송 · 빈 칸에서 Enter 방 이동 · /이름 검색 · @이름 언급 · Ctrl+O 카톡 창 앞으로 · Esc 방 닫기")
+  let hint = showHelp ? "아무 키나 누르면 닫힙니다" : !status.isEmpty ? status : mention ?? scrolled ?? (currentName == nil ? "" : "Enter 전송 · Shift+↑↓ 스크롤 · Esc 닫기 · /? 단축키")
   s += "\(dim)\(String(repeating: "─", count: leftW + 1))┴─ \(fit(hint, rightW - 1))\(reset)\u{1B}[K\r\n"
 
   // 입력줄: 오른쪽 끝이 넘치면 뒷부분만 보여준다
@@ -873,11 +873,33 @@ func draw() {
   dirty = false
 }
 
+/// 단축키 목록 (방을 열기 전 첫 화면과 "/?"에서 보여준다)
+func helpLines() -> [String] {
+  let keys: [(String, String)] = [
+    ("↑ ↓", "채팅방 고르기"),
+    ("Enter (빈 입력창)", "고른 채팅방 열기"),
+    ("글 입력 + Enter", "열린 채팅방으로 전송"),
+    ("/이름 + Enter", "채팅방 검색해서 열기"),
+    ("@이름", "언급 (Tab 자동 완성)"),
+    ("Shift+↑ ↓", "대화 3줄씩 스크롤"),
+    ("PageUp/Down (fn+↑↓)", "대화 반 화면씩 스크롤"),
+    ("End (fn+→)", "대화 맨 아래로"),
+    ("Esc", "채팅방 닫기 (읽음 처리 멈춤)"),
+    ("Ctrl+O", "카톡 창 맨 앞으로 (사진 보기)"),
+    ("Ctrl+U", "입력줄 지우기"),
+    ("/?", "이 목록 보기"),
+    ("Ctrl+C", "종료"),
+  ]
+  return ["", "  \(bold)단축키\(reset)", ""] + keys.map { "  \(cyan)\(fit($0.0, 22))\(reset) \($0.1)" }
+}
+
 // MARK: - 입력 처리 (메인 스레드)
 
 var pending: [UInt8] = []
 
 func handle(_ bytes: [UInt8]) {
+  // 단축키 목록은 아무 키나 누르면 닫는다 (그 키는 소비한다)
+  if locked({ showHelp }) { locked { showHelp = false; dirty = true }; return }
   var i = 0
   while i < bytes.count {
     let b = bytes[i]
@@ -940,6 +962,10 @@ func enter() {
   let (text, selected, current, isBusy) = locked {
     (String(inputBuf).trimmingCharacters(in: .whitespaces),
      roomList.indices.contains(cursor) ? roomList[cursor].name : nil, currentName, busy)
+  }
+  if ["/?", "/도움말", "/help"].contains(text) {
+    locked { inputBuf = []; showHelp = true; dirty = true }
+    return
   }
   if isBusy, text.isEmpty || text.hasPrefix("/") { setStatus("방을 여는 중입니다. 잠시만 기다려 주세요."); return }
   if text.hasPrefix("/"), text.count > 1 {
