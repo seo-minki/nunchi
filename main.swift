@@ -732,15 +732,19 @@ func shutdown() -> Never {
 }
 
 /// Ctrl+W: 채팅방 창을 닫아 더 이상 읽음 처리되지 않게 한다
+/// Esc·Ctrl+W: 화면에서는 바로 닫고, 카톡 창 닫기는 ax 큐에 맡긴다.
+/// (ax 큐가 새로고침 중이면 닫기가 1~2초 늦어져 Esc를 두 번 누르게 된다)
 func closeRoom() {
-  let (win, ours) = locked { (currentWin, openedByUs) }
-  guard let win else { setStatus("열린 방이 없습니다."); return }
-  if ours { closeOurs(win, true) }
-  locked {
+  let target = locked { () -> (AXUIElement, Bool)? in
+    if busy { status = "방을 여는 중입니다. 잠시 뒤에 닫아 주세요."; dirty = true; return nil }
+    guard let win = currentWin else { status = "열린 방이 없습니다."; dirty = true; return nil }
+    let ours = openedByUs
     currentWin = nil; currentName = nil; chat = []
     status = ours ? "방을 닫았습니다. 이제 새 메시지가 읽음 처리되지 않습니다." : "직접 열어 둔 창이라 닫지 않고 연결만 끊었습니다."
     dirty = true
+    return (win, ours)
   }
+  if let (win, ours) = target, ours { ax.async { closeOurs(win, true) } }
 }
 
 /// 입력줄 마지막 단어가 "@…"이면 그 뒤 글자로 대화에 나온 사람 이름 후보를 찾는다 (lock 안에서 호출)
@@ -842,7 +846,7 @@ func handle(_ bytes: [UInt8]) {
         }
         i += 3; continue
       }
-      if bytes.count == 1 { ax.async { closeRoom() }; return }   // Esc 단독: 방 닫기
+      if bytes.count == 1 { closeRoom(); return }         // Esc 단독: 방 닫기
       return   // 그 밖의 ESC 시퀀스는 무시한다
     case 13:                                              // Enter
       enter()
@@ -858,7 +862,7 @@ func handle(_ bytes: [UInt8]) {
         inputBuf.append(contentsOf: "@" + token + " ")
       }
     case 15: ax.async { bringToFront() }                  // Ctrl+O
-    case 23: ax.async { closeRoom() }                     // Ctrl+W
+    case 23: closeRoom()                                  // Ctrl+W
     default:
       if b >= 32 {
         pending.append(b)
