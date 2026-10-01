@@ -33,9 +33,13 @@ macOS용 카카오톡을 터미널에서 쓰는 비공식 클라이언트입니�
 ```sh
 git clone https://github.com/seo-minki/kakaotalk-tui.git
 cd kakaotalk-tui
-./build.sh                       # kt 실행 파일이 만들어집니다
-ln -s "$PWD/kt" ~/.local/bin/kt  # PATH에 있는 아무 폴더나 괜찮습니다
+./install.sh   # 빌드한 뒤 /usr/local/bin/kt 로 설치합니다 (관리자 비밀번호를 물어볼 수 있습니다)
 ```
+
+- 다른 곳에 설치하려면 `PREFIX=~/.local ./install.sh`처럼 경로를 지정하세요. 그 폴더의 `bin`이 PATH에 있어야 합니다.
+- 설치 없이 저장소 폴더에서 `./build.sh` 후 `./kt`로 실행해도 됩니다.
+- 지우려면 `./install.sh --remove`를 실행하세요.
+- 코드를 받아 업데이트한 뒤에는 `./install.sh`를 다시 실행하세요.
 
 처음 실행하기 전에 **시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용**에서 사용하는 터미널 앱(Terminal, iTerm, Ghostty 등)을 켜 주세요.
 

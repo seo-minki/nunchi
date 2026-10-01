@@ -11,8 +11,9 @@ AI 코딩 에이전트가 이 저장소에서 작업할 때 참고할 내용입�
 ## 빌드와 실행
 
 ```sh
-./build.sh   # swiftc -O -suppress-warnings main.swift -o kt
+./build.sh     # swiftc -O -suppress-warnings main.swift -o kt
 ./kt
+./install.sh   # 빌드 + $PREFIX/bin/kt 로 복사 (기본 /usr/local, --remove로 삭제)
 ```
 
 - Swift 6 동시성 경고는 Swift 5 모드에서는 무해해서 숨기고 있습니다.
