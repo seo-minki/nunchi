@@ -1,0 +1,5 @@
+# 빌드 결과물
+/kt
+
+# macOS
+.DS_Store
