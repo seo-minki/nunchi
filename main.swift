@@ -77,11 +77,22 @@ func roomWindow(_ name: String) -> AXUIElement? {
 }
 func alive(_ win: AXUIElement) -> Bool { (attr(app, "AXWindows") as? [AXUIElement] ?? []).contains { CFEqual($0, win) } }
 
-var cachedTable: AXUIElement?
+/// 채팅방 목록 표. 메인 창이 친구·더보기 탭이면 목록 표가 사라지므로 채팅 탭 버튼(chatrooms)을 눌러 돌려놓는다.
+var cachedChat: (scroll: AXUIElement, table: AXUIElement)?
 func mainTable() -> AXUIElement? {
-  if let t = cachedTable, role(t) == "AXTable" { return t }
-  cachedTable = mainWindow().flatMap { find($0, { role($0) == "AXTable" }) }
-  return cachedTable
+  guard let main = mainWindow() else { return nil }
+  let children = kids(main)
+  // 채팅 목록 스크롤 영역이 아직 메인 창에 붙어 있으면 캐시를 그대로 쓴다 (탭이 바뀌면 떨어져 나간다)
+  if let c = cachedChat, children.contains(where: { CFEqual($0, c.scroll) }) { return c.table }
+  func chatScroll() -> AXUIElement? { kids(main).first { str($0, "AXIdentifier") == "_NS:101" } }
+  var scroll = chatScroll()
+  if scroll == nil, let tab = children.first(where: { str($0, "AXIdentifier") == "chatrooms" }) {
+    AXUIElementPerformAction(tab, "AXPress" as CFString)
+    for _ in 0..<10 { usleep(50_000); scroll = chatScroll(); if scroll != nil { break } }
+  }
+  guard let scroll, let table = kids(scroll).first(where: { role($0) == "AXTable" }) else { return nil }
+  cachedChat = (scroll, table)
+  return table
 }
 func mainRows() -> [AXUIElement] { mainTable().flatMap { attr($0, "AXRows") as? [AXUIElement] } ?? [] }
 

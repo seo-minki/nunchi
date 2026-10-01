@@ -46,6 +46,7 @@ AI 코딩 에이전트가 이 저장소에서 작업할 때 참고할 내용입�
 카카오톡 내부 식별자(`_NS:숫자`)에 의존하므로, 카카오톡이 업데이트되면 가장 먼저 여기를 확인하세요.
 
 **메인 창** (`AXIdentifier == "Main Window"`)
+- 친구·채팅·더보기 탭 버튼의 id는 각각 `friends`, `chatrooms`, `more`입니다. 채팅 목록은 **채팅 탭일 때만** 있는 `AXScrollArea` `_NS:101` 안에 있습니다. 다른 탭이면 `mainTable()`이 `chatrooms` 버튼을 AXPress로 눌러 채팅 탭으로 돌려놓습니다.
 - 채팅방 목록은 `AXTable`이고, 행 → `AXCell` → 자식 요소 순서로 되어 있습니다.
   - `AXStaticText` `_NS:40`: 방 이름
   - `AXStaticText` `_NS:69`: 시간
