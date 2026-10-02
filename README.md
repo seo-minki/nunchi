@@ -34,6 +34,8 @@ cd nunchi
 - 설치 없이 저장소 폴더에서 `./build.sh` 후 `./nunchi`로 실행해도 됩니다.
 - 지우려면 `./install.sh --remove`를 실행하세요.
 
+처음 실행하기 전에 **시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용**에서 사용하는 터미널 앱(Terminal, iTerm, Ghostty 등)을 켜 주세요.
+
 ## 업데이트
 
 ```sh
