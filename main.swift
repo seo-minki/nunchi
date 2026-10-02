@@ -61,7 +61,7 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-let version = "0.5.0"
+let version = "0.5.1"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
 // MARK: - 업데이트
@@ -330,7 +330,10 @@ func merge(_ old: [Message], _ new: [Message]) -> [Message] {
   return new
 }
 
-let timePattern = try! NSRegularExpression(pattern: "^\\d{1,2}:\\d{2}$")
+// 24시간제 "11:58"과 12시간제 "오후 3:05", "3:05 PM"을 모두 시간으로 본다.
+// macOS는 "3:05 PM" 사이에 일반 공백 대신 좁은 공백(U+202F)을 넣기도 한다.
+let timePattern = try! NSRegularExpression(
+  pattern: "^(?:(?:오전|오후|AM|PM|am|pm)[\\s\\u00A0\\u202F]?)?\\d{1,2}:\\d{2}(?:[\\s\\u00A0\\u202F]?(?:AM|PM|am|pm))?$")
 func isTime(_ s: String) -> Bool { timePattern.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil }
 
 func chatRows(_ win: AXUIElement) -> [AXUIElement] {
