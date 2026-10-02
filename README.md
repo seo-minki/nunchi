@@ -33,7 +33,26 @@ cd nunchi
 - 다른 곳에 설치하려면 `PREFIX=~/.local ./install.sh`처럼 경로를 지정하세요. 그 폴더의 `bin`이 PATH에 있어야 합니다.
 - 설치 없이 저장소 폴더에서 `./build.sh` 후 `./nunchi`로 실행해도 됩니다.
 - 지우려면 `./install.sh --remove`를 실행하세요.
-- 코드를 받아 업데이트한 뒤에는 `./install.sh`를 다시 실행하세요.
+
+## 업데이트
+
+```sh
+nunchi --update
+```
+
+- 설치할 때 기억해 둔 저장소 폴더에서 최신 코드를 받아(`git pull`) 다시 빌드·설치합니다.
+- `nunchi`를 실행하면 하루에 한 번 GitHub에 새 버전이 있는지 확인하고, 있으면 화면 위쪽에 알려 줍니다. 버전 번호만 확인하며 카카오톡 데이터는 보내지 않습니다. 끄려면 `NUNCHI_NO_UPDATE_CHECK=1`을 설정하세요.
+
+**v0.4.0 이하를 쓰고 있다면** 아직 `--update`가 없으니, 클론한 폴더에서 한 번만 직접 업데이트해 주세요.
+
+```sh
+cd kakaotalk-tui   # 예전에 클론한 폴더 (이름이 kakaotalk-tui일 수 있습니다)
+git pull
+./install.sh
+```
+
+- 저장소 이름이 `kakaotalk-tui`에서 `nunchi`로 바뀌었지만, GitHub가 예전 주소를 자동으로 연결해 주므로 `git pull`은 그대로 됩니다.
+- 예전 명령어 `kt`로 설치했다면 `install.sh`가 정리하고 `nunchi`로 새로 설치합니다.
 
 처음 실행하기 전에 **시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용**에서 사용하는 터미널 앱(Terminal, iTerm, Ghostty 등)을 켜 주세요.
 
@@ -92,7 +111,8 @@ nunchi
 - 2분 동안 입력이 없으면 채팅방을 자동으로 닫아 읽음 처리 멈추기 (`NUNCHI_IDLE`로 조절)
 - 방을 열기 전에 고른 방의 마지막 메시지 엿보기 (읽음 처리 안 됨)
 - 메시지가 빠르게 오는 방에서 기억해 둔 이전 대화가 사라지던 문제 수정
-- `nunchi --version`
+- `nunchi --version`, `nunchi --update`(최신 버전 받아 다시 설치), 새 버전 알림
+- `install.sh`가 예전 명령어 `kt`를 정리
 
 ### v0.4.0 (2026-10-01)
 - 대화 칸 스크롤 (Shift+↑↓, PageUp/PageDown, End). 위로 올려 보는 동안 새 메시지가 와도 위치 유지

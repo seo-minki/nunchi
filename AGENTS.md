@@ -113,6 +113,8 @@ AI 코딩 에이전트가 이 저장소에서 작업할 때 참고할 내용입�
 ## 버전과 변경 이력
 
 - 버전은 `main.swift`의 `version` 상수와 git 태그(`v0.5.0` 형식)로 관리합니다.
+- 사용자의 새 버전 알림과 `nunchi --update`는 **git 태그**를 기준으로 동작합니다. 릴리스할 때는 `version`을 올린 커밋에 같은 번호의 태그를 붙여 함께 push해야 합니다.
+- `install.sh`는 저장소 위치를 `~/.config/nunchi/source`에 적어 두고, `--update`는 거기서 `git pull --ff-only && ./install.sh`를 실행합니다. 최신 버전 확인 결과는 `~/.config/nunchi/latest-version`에 하루 동안 기억합니다.
 - 기능을 추가하거나 고치면 `version`을 올리고, README의 "변경 이력"에 사용자 입장에서 무엇이 바뀌었는지 적어 주세요.
 
 ## 코드 스타일

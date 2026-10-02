@@ -64,6 +64,67 @@ func node(_ e: AXUIElement) -> Node {
 let version = "0.5.0"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
+// MARK: - 업데이트
+// install.sh가 저장소 위치를 ~/.config/nunchi/source에 적어 둔다. --update는 거기서 git pull 후 다시 설치한다.
+
+// install.sh와 같은 곳을 보도록 $HOME을 따른다
+let configDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()).appendingPathComponent(".config/nunchi")
+func sourceDir() -> String? {
+  guard let s = try? String(contentsOf: configDir.appendingPathComponent("source"), encoding: .utf8) else { return nil }
+  let path = s.trimmingCharacters(in: .whitespacesAndNewlines)
+  return FileManager.default.fileExists(atPath: path + "/.git") ? path : nil
+}
+
+if CommandLine.arguments.contains("--update") {
+  guard let src = sourceDir() else {
+    die("저장소 위치를 모릅니다. 클론한 폴더에서 git pull && ./install.sh 를 실행해 주세요.")
+  }
+  print("업데이트: \(src)")
+  fflush(stdout)
+  let p = Process()
+  p.executableURL = URL(fileURLWithPath: "/bin/sh")
+  p.arguments = ["-c", "cd \"$1\" && git pull --ff-only && ./install.sh", "sh", src]
+  do { try p.run() } catch { die("업데이트를 실행하지 못했습니다: \(error)") }
+  p.waitUntilExit()
+  exit(p.terminationStatus)
+}
+
+/// "0.10.0" > "0.9.1" 처럼 숫자로 비교한다
+func isNewer(_ a: String, than b: String) -> Bool {
+  let x = a.split(separator: ".").map { Int($0) ?? 0 }, y = b.split(separator: ".").map { Int($0) ?? 0 }
+  for i in 0..<max(x.count, y.count) {
+    let p = i < x.count ? x[i] : 0, q = i < y.count ? y[i] : 0
+    if p != q { return p > q }
+  }
+  return false
+}
+
+/// GitHub의 최신 버전 태그. 하루에 한 번만 확인하고 결과를 기억해 둔다.
+/// 버전 태그 목록만 받아 오고 카카오톡 데이터는 아무것도 보내지 않는다.
+func latestVersion() -> String? {
+  if ProcessInfo.processInfo.environment["NUNCHI_NO_UPDATE_CHECK"] != nil { return nil }
+  guard let src = sourceDir() else { return nil }
+  let stamp = configDir.appendingPathComponent("latest-version")
+  if let d = (try? FileManager.default.attributesOfItem(atPath: stamp.path))?[.modificationDate] as? Date,
+     Date().timeIntervalSince(d) < 86400 {
+    return (try? String(contentsOf: stamp, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+  let p = Process(), pipe = Pipe()
+  p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+  p.arguments = ["-C", src, "ls-remote", "--tags", "--refs", "origin", "v*"]
+  p.standardOutput = pipe
+  p.standardError = FileHandle.nullDevice
+  guard (try? p.run()) != nil else { return nil }
+  DispatchQueue.global().asyncAfter(deadline: .now() + 8) { if p.isRunning { p.terminate() } }
+  p.waitUntilExit()
+  guard p.terminationStatus == 0 else { return nil }
+  let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+  let tags = out.split(separator: "\n").compactMap { $0.split(separator: "/").last.map { String($0.dropFirst()) } }
+  guard let best = tags.max(by: { isNewer($1, than: $0) }) else { return nil }
+  try? best.write(to: stamp, atomically: true, encoding: .utf8)
+  return best
+}
+
 // --demo: 카톡에 연결하지 않고 가짜 데이터로 화면을 한 번 그린다 (README 스크린샷용)
 let demo = CommandLine.arguments.contains("--demo")
 guard demo || AXIsProcessTrusted() else {
@@ -193,7 +254,7 @@ func open(_ name: String, hint: Int?) -> AXUIElement? {
 // MARK: - 채팅방 창 위치
 // 사용자가 옮겨 둔 위치를 기억한다. 저장된 위치가 없으면 카톡 메인 창 옆에 붙인다.
 
-let positionFile = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/nunchi/window-position")
+let positionFile = configDir.appendingPathComponent("window-position")
 
 func savedPosition() -> CGPoint? {
   guard let text = try? String(contentsOf: positionFile, encoding: .utf8) else { return nil }
@@ -580,6 +641,7 @@ var status = ""
 var busy = false                     // 방 열기·전송 중
 var dirty = true                     // 다시 그려야 함
 var showHelp = false                 // "/?"로 연 단축키 목록
+var newVersion: String?             // GitHub에 더 새 버전이 있으면 그 번호
 var lastInputAt = Date()             // 마지막 키 입력 시각 (자동 닫기용)
 /// 이 시간 동안 키 입력이 없으면 방을 닫는다. 열어 두면 카톡이 새 메시지를 계속 읽음 처리하기 때문.
 /// NUNCHI_IDLE=초 로 바꿀 수 있고 0이면 끈다.
@@ -883,7 +945,8 @@ func draw() {
   }
 
   var s = "\u{1B}[H"
-  let title = currentName.map { "\(bold)\($0)\(reset)" } ?? "\(dim)nunchi\(reset)"
+  var title = currentName.map { "\(bold)\($0)\(reset)" } ?? "\(dim)nunchi\(reset)"
+  if let v = newVersion { title += "  \(yellow)새 버전 v\(v) 있음 · nunchi --update\(reset)" }
   s += "\(dim)\(fit(" sessions", leftW))\(reset) │ \(title)\u{1B}[K\r\n"
   for i in 0..<bodyH {
     let l = i < left.count ? left[i] : String(repeating: " ", count: leftW)
@@ -1044,6 +1107,9 @@ func runDemo() -> Never {
 // MARK: - main
 
 if demo { runDemo() }
+Thread {
+  if let v = latestVersion(), isNewer(v, than: version) { locked { newVersion = v; dirty = true } }
+}.start()
 rawMode()
 locked { draw() }
 ax.async { refreshOnce() }
