@@ -61,6 +61,9 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
+let version = "0.5.0"
+if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
+
 // --demo: 카톡에 연결하지 않고 가짜 데이터로 화면을 한 번 그린다 (README 스크린샷용)
 let demo = CommandLine.arguments.contains("--demo")
 guard demo || AXIsProcessTrusted() else {
@@ -110,19 +113,22 @@ func unreadTotal() -> String {
   return cachedUnreadTotal.flatMap { str($0, "AXValue") } ?? ""
 }
 
-struct Room { let name: String; let unread: Int }
+struct Room { let name: String; let unread: Int; var last = ""; var time = "" }
 
-/// 목록 한 줄. 이름·안 읽은 수만 읽고 미리보기(요청이 많이 든다)는 읽지 않는다.
+/// 목록 한 줄: 이름, 안 읽은 수, 마지막 메시지 미리보기와 시간.
+/// 미리보기는 방을 열지 않고 엿볼 수 있게 읽는다 (목록에서 읽는 건 읽음 처리되지 않는다).
 func room(_ row: AXUIElement) -> Room? {
   guard let cell = kids(row).first else { return nil }
-  var name = "", unread = 0
+  var name = "", unread = 0, last = "", time = ""
   for k in kids(cell) {
     let n = node(k)
+    if n.role == "AXScrollArea" { last = kids(n.el).first.flatMap { str($0, "AXValue") } ?? "" }
     guard n.role == "AXStaticText" else { continue }
     if n.id == "_NS:40" { name = n.value }
+    if n.id == "_NS:69" { time = n.value }
     if n.id.isEmpty, let u = Int(n.value) { unread = u }
   }
-  return name.isEmpty ? nil : Room(name: name, unread: unread)
+  return name.isEmpty ? nil : Room(name: name, unread: unread, last: last, time: time)
 }
 
 /// 이름만 필요할 때: 이름 칸을 찾는 즉시 멈춘다
@@ -231,8 +237,15 @@ struct Message: Equatable { let sender: String; var time: String; let body: Stri
 
 /// 같은 메시지인지. 맨 위 행은 앞사람 이름이 잘려 이름이 비어 있을 수 있어 이름은 느슨하게 비교한다.
 func sameMessage(_ a: Message, _ b: Message) -> Bool {
-  a.time == b.time && a.body == b.body && a.mine == b.mine
+  // 카톡이 행을 다시 불러오는 순간엔 묶음의 마지막 행이 빠져 시간이 비어 있을 수 있다. 빈 시간은 아무 시간과도 맞는다.
+  (a.time == b.time || a.time.isEmpty || b.time.isEmpty) && a.body == b.body && a.mine == b.mine
     && (a.sender == b.sender || a.sender.isEmpty || b.sender.isEmpty)
+}
+
+/// 겹치는 메시지는 새 값을 쓰되(안 읽은 수 갱신), 새 쪽에 빠진 시간·이름은 이전 값으로 채운다
+func combine(_ old: Message, _ new: Message) -> Message {
+  Message(sender: new.sender.isEmpty ? old.sender : new.sender, time: new.time.isEmpty ? old.time : new.time,
+          body: new.body, mine: new.mine, unread: new.unread)
 }
 
 /// 카톡은 화면 근처의 메시지만 내주고 그 범위가 수시로 바뀐다.
@@ -243,11 +256,16 @@ func merge(_ old: [Message], _ new: [Message]) -> [Message] {
   // old[i...]가 new의 앞부분과 같아지는 가장 앞의 i (겹침이 가장 긴 곳)
   for i in max(0, old.count - new.count)..<old.count {
     let tail = old[i...]
-    if zip(tail, new).allSatisfy(sameMessage) { return Array((old[..<i] + new).suffix(500)) }
+    if zip(tail, new).allSatisfy(sameMessage) {
+      let overlap = zip(tail, new).map(combine)
+      return Array((Array(old[..<i]) + overlap + Array(new.dropFirst(overlap.count))).suffix(500))
+    }
   }
   // new가 old 안에 통째로 들어 있으면(범위가 위로 밀린 경우) 그대로 둔다
   if let first = new.first, let j = old.firstIndex(where: { sameMessage($0, first) }),
      j + new.count <= old.count, zip(old[j...], new).allSatisfy(sameMessage) { return old }
+  // 겹치는 곳이 없는데 새 목록이 훨씬 작으면 카톡이 행을 다시 불러오는 중인 것이다. 이전 대화를 버리지 않는다.
+  if new.count < old.count / 2 { return old }
   return new
 }
 
@@ -562,6 +580,10 @@ var status = ""
 var busy = false                     // 방 열기·전송 중
 var dirty = true                     // 다시 그려야 함
 var showHelp = false                 // "/?"로 연 단축키 목록
+var lastInputAt = Date()             // 마지막 키 입력 시각 (자동 닫기용)
+/// 이 시간 동안 키 입력이 없으면 방을 닫는다. 열어 두면 카톡이 새 메시지를 계속 읽음 처리하기 때문.
+/// NUNCHI_IDLE=초 로 바꿀 수 있고 0이면 끈다.
+let idleSeconds = Double(ProcessInfo.processInfo.environment["NUNCHI_IDLE"] ?? "") ?? 120
 var scrollBack = 0                   // 대화 칸을 맨 아래에서 몇 줄 위로 올려 보고 있는지
 var lastChatLines = 0                // 직전에 그린 대화 줄 수 (새 메시지가 와도 보던 위치를 유지하려고)
 var newBelow = false                 // 올려 보는 동안 아래에 새 메시지가 왔는지
@@ -834,7 +856,17 @@ func draw() {
     }
   }
   let helpScreen = showHelp || currentName == nil
-  if helpScreen { right = helpLines() }
+  if helpScreen {
+    right = helpLines()
+    // 방을 열기 전에는 고른 방의 마지막 메시지를 엿보기로 보여준다
+    if !showHelp, roomList.indices.contains(cursor) {
+      let r = roomList[cursor]
+      var peek = ["", "  \(bold)\(r.name)\(reset) \(dim)\(r.time) · 마지막 메시지 (열지 않아 읽음 처리 안 됨)\(reset)"]
+      peek += wrap(r.last.isEmpty ? "(미리보기 없음)" : r.last, rightW - 4).prefix(4).map { "  \($0)" }
+      peek += ["  \(dim)Enter로 방 열기\(reset)", "  \(dim)\(String(repeating: "─", count: max(0, rightW - 4)))\(reset)"]
+      right = peek + right.dropFirst()
+    }
+  }
   // 위로 올려 보는 중이면 새 줄이 생긴 만큼 같이 올려서 보던 위치를 유지한다
   if !helpScreen {
     if scrollBack > 0, right.count > lastChatLines, lastChatLines > 0 {
@@ -862,7 +894,9 @@ func draw() {
     c.names.isEmpty ? "@\(c.query): 대화에 나온 사람 중 일치 없음 (보낼 때 카톡 목록에서 찾음)" : "Tab → " + c.names.prefix(5).joined(separator: ", ")
   }
   let scrolled = scrollBack > 0 ? "↑ \(scrollBack)줄 위를 보는 중 · End 맨 아래로" + (newBelow ? " · 새 메시지 있음" : "") : nil
-  let hint = showHelp ? "아무 키나 누르면 닫힙니다" : !status.isEmpty ? status : mention ?? scrolled ?? (currentName == nil ? "" : "Enter 전송 · Shift+↑↓ 스크롤 · Esc 닫기 · /? 단축키")
+  let idleLeft = idleSeconds - Date().timeIntervalSince(lastInputAt)
+  let idleHint = currentName != nil && idleSeconds > 0 && idleLeft <= 20 && idleLeft > 0 ? "\(Int(idleLeft.rounded(.up)))초 뒤 자동으로 방을 닫습니다 (아무 키나 누르면 유지)" : nil
+  let hint = showHelp ? "아무 키나 누르면 닫힙니다" : idleHint != nil && status.isEmpty ? idleHint! : !status.isEmpty ? status : mention ?? scrolled ?? (currentName == nil ? "" : "Enter 전송 · Shift+↑↓ 스크롤 · Esc 닫기 · /? 단축키")
   s += "\(dim)\(String(repeating: "─", count: leftW + 1))┴─ \(fit(hint, rightW - 1))\(reset)\u{1B}[K\r\n"
 
   // 입력줄: 오른쪽 끝이 넘치면 뒷부분만 보여준다
@@ -898,6 +932,7 @@ func helpLines() -> [String] {
 var pending: [UInt8] = []
 
 func handle(_ bytes: [UInt8]) {
+  locked { lastInputAt = Date() }
   // 단축키 목록은 아무 키나 누르면 닫는다 (그 키는 소비한다)
   if locked({ showHelp }) { locked { showHelp = false; dirty = true }; return }
   var i = 0
@@ -1023,6 +1058,15 @@ while true {
     handle(Array(buf[0..<n]))
     locked { draw() }
   } else {
+    // 입력이 한동안 없으면 방을 닫아 읽음 처리를 멈춘다
+    let (open, isBusy, idle) = locked { (currentName != nil, busy, Date().timeIntervalSince(lastInputAt)) }
+    if open, !isBusy, idleSeconds > 0, idle > idleSeconds {
+      closeRoom()
+      let span = idleSeconds >= 60 ? "\(Int(idleSeconds / 60))분" : "\(Int(idleSeconds))초"
+      setStatus("\(span) 동안 입력이 없어 방을 닫았습니다. 이제 읽음 처리되지 않습니다.")
+    } else if open, idleSeconds > 0, idle > idleSeconds - 21 {
+      locked { dirty = true }   // 카운트다운 안내 갱신
+    }
     locked { if dirty { draw() } }
   }
 }
