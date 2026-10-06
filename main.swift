@@ -61,7 +61,7 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-let version = "0.5.3"
+let version = "0.5.4"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
 // MARK: - 업데이트
@@ -601,6 +601,42 @@ func wrap(_ s: String, _ w: Int) -> [String] {
   return lines
 }
 
+/// 폭 w로 감싸되, 주소(http/https)는 OSC 8 링크로 감싼다.
+/// 터미널은 줄마다 따로 주소를 찾아서, 여러 줄로 나뉜 주소는 첫 줄만 링크가 된다.
+/// OSC 8로 각 줄 조각에 전체 주소를 걸어 두면 어느 줄을 눌러도 전체 주소로 열린다. 남는 칸은 공백으로 채운다.
+// "https://…", "www.…", 그리고 "naver.me/abc"처럼 스킴 없이 경로가 붙은 주소까지 링크로 본다
+let urlPattern = try! NSRegularExpression(
+  pattern: "(?:https?://|www\\.)[^\\s]+|\\b[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}/[^\\s]*")
+func linkedLines(_ s: String, _ w: Int) -> [String] {
+  var out: [String] = []
+  for para in s.split(separator: "\n", omittingEmptySubsequences: false) {
+    let chars = Array(String(para).filter { $0 != "\t" })
+    let text = String(chars)
+    var urls: [String] = [], tag = Array(repeating: -1, count: chars.count)
+    for m in urlPattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+      guard let r = Range(m.range, in: text) else { continue }
+      let start = text.distance(from: text.startIndex, to: r.lowerBound)
+      let found = String(text[r])
+      urls.append(found.hasPrefix("http") ? found : "https://" + found)
+      for k in start..<(start + text[r].count) { tag[k] = urls.count - 1 }
+    }
+    var line = "", used = 0, open = -1
+    func closeLink() { if open >= 0 { line += "\u{1B}]8;;\u{1B}\\"; open = -1 } }
+    func endLine() { closeLink(); out.append(line + String(repeating: " ", count: max(0, w - used))); line = ""; used = 0 }
+    for (k, c) in chars.enumerated() {
+      let cw = width(c)
+      if used + cw > w { endLine() }
+      if tag[k] != open {
+        closeLink()
+        if tag[k] >= 0 { line += "\u{1B}]8;;\(urls[tag[k]])\u{1B}\\"; open = tag[k] }
+      }
+      line.append(c); used += cw
+    }
+    endLine()
+  }
+  return out
+}
+
 // MARK: - 터미널
 
 var original = termios()
@@ -917,10 +953,10 @@ func draw() {
     let unread = m.unread > 0 ? " \(yellow)\(m.unread)\(reset)" : ""
     if m.mine {
       right.append("\(cyan)❯\(reset) \(bold)나\(reset) \(dim)\(m.time)\(reset)\(unread)")
-      for l in wrap(m.body, rightW - 2) { right.append("  \(cyan)\(fit(l, rightW - 2))\(reset)") }
+      for l in linkedLines(m.body, rightW - 2) { right.append("  \(cyan)\(l)\(reset)") }
     } else {
       right.append("\(orange)⏺\(reset) \(bold)\(m.sender)\(reset) \(dim)\(m.time)\(reset)\(unread)")
-      for l in wrap(m.body, rightW - 2) { right.append("  \(fit(l, rightW - 2))") }
+      for l in linkedLines(m.body, rightW - 2) { right.append("  \(l)") }
     }
   }
   let helpScreen = showHelp || currentName == nil
