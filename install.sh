@@ -9,7 +9,11 @@ CONFIG="$HOME/.config/nunchi"
 
 # 쓰기 권한이 없는 폴더면 sudo로 실행한다 (폴더가 아직 없으면 가장 가까운 상위 폴더로 판단)
 writable() { d="$PREFIX/bin"; while [ ! -e "$d" ]; do d=$(dirname "$d"); done; [ -w "$d" ]; }
-run() { if writable; then "$@"; else sudo "$@"; fi }
+run() {
+  if writable; then "$@"; return; fi
+  if [ -z "$ASKED" ]; then echo "$PREFIX/bin 에 설치하려면 관리자 비밀번호가 필요합니다."; ASKED=1; fi
+  sudo "$@"
+}
 
 # v0.2.0까지는 명령어 이름이 kt였다. 이 프로젝트가 설치한 kt면 정리한다.
 LEGACY="$PREFIX/bin/kt"

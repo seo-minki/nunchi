@@ -61,7 +61,7 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-let version = "0.5.2"
+let version = "0.5.3"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
 // MARK: - 업데이트
@@ -81,12 +81,13 @@ if CommandLine.arguments.contains("--update") {
   }
   print("업데이트: \(src)")
   fflush(stdout)
-  let p = Process()
-  p.executableURL = URL(fileURLWithPath: "/bin/sh")
-  p.arguments = ["-c", "cd \"$1\" && git pull --ff-only && ./install.sh", "sh", src]
-  do { try p.run() } catch { die("업데이트를 실행하지 못했습니다: \(error)") }
-  p.waitUntilExit()
-  exit(p.terminationStatus)
+  // 자식 프로세스(Process)로 띄우면 터미널의 백그라운드가 되어 sudo 비밀번호가 평문으로 보이고 입력도 안 된다.
+  // 이 프로세스 자체를 셸로 바꿔(exec) 포그라운드에서 실행한다.
+  var args: [UnsafeMutablePointer<CChar>?] = []
+  for a in ["sh", "-c", "cd \"$1\" && git pull --ff-only && ./install.sh", "sh", src] { args.append(strdup(a)) }
+  args.append(nil)
+  execv("/bin/sh", args)
+  die("업데이트를 실행하지 못했습니다.")
 }
 
 /// "0.10.0" > "0.9.1" 처럼 숫자로 비교한다
