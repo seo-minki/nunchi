@@ -61,7 +61,7 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-let version = "0.5.1"
+let version = "0.5.2"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
 // MARK: - 업데이트
@@ -562,6 +562,8 @@ func send(_ win: AXUIElement, _ text: String) throws {
 func width(_ c: Character) -> Int {
   guard let s = c.unicodeScalars.first else { return 0 }
   if c.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation }) { return 2 }
+  // ❤️ ✔️ 1️⃣ 처럼 이모지 변형 기호(U+FE0F)나 키캡(U+20E3)이 붙으면 터미널은 2칸으로 그린다
+  if c.unicodeScalars.contains(where: { $0.value == 0xFE0F || $0.value == 0x20E3 }) { return 2 }
   switch s.value {
   case 0..<0x20, 0x7F: return 0
   case 0x1100...0x115F, 0x2E80...0xA4CF, 0xAC00...0xD7A3, 0xF900...0xFAFF,
@@ -997,6 +999,15 @@ func helpLines() -> [String] {
 
 var pending: [UInt8] = []
 
+/// 터미널에서 이미 도착했거나 waitMs 안에 도착하는 입력을 읽는다
+func pendingInput(waitMs: Int32) -> [UInt8] {
+  var fds = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+  guard poll(&fds, 1, waitMs) > 0 else { return [] }
+  var b = [UInt8](repeating: 0, count: 256)
+  let n = read(STDIN_FILENO, &b, b.count)
+  return n > 0 ? Array(b[0..<n]) : []
+}
+
 func handle(_ bytes: [UInt8]) {
   locked { lastInputAt = Date() }
   // 단축키 목록은 아무 키나 누르면 닫는다 (그 키는 소비한다)
@@ -1032,6 +1043,11 @@ func handle(_ bytes: [UInt8]) {
       if bytes.count == 1 { closeRoom(); return }         // Esc 단독: 방 닫기
       return   // 그 밖의 ESC 시퀀스는 무시한다
     case 13:                                              // Enter
+      // 한글 조합 중에 Enter를 누르면 마지막 글자가 Enter보다 늦게 올 수 있다. 잠깐 기다렸다가 먼저 넣는다.
+      if i == bytes.count - 1 {
+        let late = pendingInput(waitMs: 40)
+        if !late.isEmpty { handle(late.filter { $0 != 13 }) }
+      }
       enter()
     case 127, 8:                                          // Backspace
       locked { if !inputBuf.isEmpty { inputBuf.removeLast() } }
