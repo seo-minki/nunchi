@@ -61,7 +61,7 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-let version = "0.5.4"
+let version = "0.5.5"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
 // MARK: - 업데이트
@@ -175,22 +175,25 @@ func unreadTotal() -> String {
   return cachedUnreadTotal.flatMap { str($0, "AXValue") } ?? ""
 }
 
-struct Room { let name: String; let unread: Int; var last = ""; var time = "" }
+struct Room { let name: String; let unread: Int; var last = ""; var time = ""; var unreadPlus = false }
 
 /// 목록 한 줄: 이름, 안 읽은 수, 마지막 메시지 미리보기와 시간.
 /// 미리보기는 방을 열지 않고 엿볼 수 있게 읽는다 (목록에서 읽는 건 읽음 처리되지 않는다).
 func room(_ row: AXUIElement) -> Room? {
   guard let cell = kids(row).first else { return nil }
-  var name = "", unread = 0, last = "", time = ""
+  var name = "", unread = 0, last = "", time = "", plus = false
   for k in kids(cell) {
     let n = node(k)
     if n.role == "AXScrollArea" { last = kids(n.el).first.flatMap { str($0, "AXValue") } ?? "" }
     guard n.role == "AXStaticText" else { continue }
     if n.id == "_NS:40" { name = n.value }
     if n.id == "_NS:69" { time = n.value }
-    if n.id.isEmpty, let u = Int(n.value) { unread = u }
+    // 300개가 넘으면 카톡은 "300+"로 보낸다
+    if n.id.isEmpty, let u = Int(n.value.hasSuffix("+") ? String(n.value.dropLast()) : n.value) {
+      unread = u; plus = n.value.hasSuffix("+")
+    }
   }
-  return name.isEmpty ? nil : Room(name: name, unread: unread, last: last, time: time)
+  return name.isEmpty ? nil : Room(name: name, unread: unread, last: last, time: time, unreadPlus: plus)
 }
 
 /// 이름만 필요할 때: 이름 칸을 찾는 즉시 멈춘다
@@ -934,7 +937,7 @@ func draw() {
   var left: [String] = []
   for i in top..<min(top + bodyH, roomList.count) {
     let r = roomList[i]
-    let badge = r.unread > 0 ? " \(r.unread > 99 ? "99+" : String(r.unread))" : ""
+    let badge = r.unread > 0 ? " \(r.unread)\(r.unreadPlus ? "+" : "")" : ""
     let name = fit(r.name, leftW - 2 - width(badge))
     let marker = r.name == currentName ? "\(orange)▍\(reset)" : " "
     if i == cursor {
