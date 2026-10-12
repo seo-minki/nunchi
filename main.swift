@@ -61,7 +61,7 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-let version = "1.3.0"
+let version = "1.3.1"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
 // MARK: - 업데이트
@@ -100,15 +100,18 @@ func isNewer(_ a: String, than b: String) -> Bool {
   return false
 }
 
-/// GitHub의 최신 버전 태그. 하루에 한 번만 확인하고 결과를 기억해 둔다.
+/// GitHub의 최신 버전 태그. 한 시간에 한 번만 확인하고 결과를 기억해 둔다.
+/// cachedOnly면 네트워크 없이 기억해 둔 값만 돌려준다 (시작을 늦추지 않으려고).
 /// 버전 태그 목록만 받아 오고 카카오톡 데이터는 아무것도 보내지 않는다.
-func latestVersion(timeout: Double = 8) -> String? {
+func latestVersion(timeout: Double = 8, cachedOnly: Bool = false) -> String? {
   if ProcessInfo.processInfo.environment["NUNCHI_NO_UPDATE_CHECK"] != nil { return nil }
   guard let src = sourceDir() else { return nil }
   let stamp = configDir.appendingPathComponent("latest-version")
+  let cached = (try? String(contentsOf: stamp, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+  if cachedOnly { return cached }
   if let d = (try? FileManager.default.attributesOfItem(atPath: stamp.path))?[.modificationDate] as? Date,
-     Date().timeIntervalSince(d) < 86400 {
-    return (try? String(contentsOf: stamp, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+     Date().timeIntervalSince(d) < 3600 {
+    return cached
   }
   let p = Process(), pipe = Pipe()
   p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
@@ -127,6 +130,7 @@ func latestVersion(timeout: Double = 8) -> String? {
 }
 
 // 시작할 때 새 버전이 있으면 자동으로 업데이트한 뒤 새 버전으로 다시 실행한다.
+// 새 버전 확인은 실행 중에 뒤에서 하고(한 시간에 한 번), 시작할 때는 기억해 둔 결과만 본다. 그래서 시작이 느려지지 않는다.
 // NUNCHI_NO_AUTO_UPDATE=1이면 끄고, 다시 실행된 프로세스는 NUNCHI_SKIP_AUTO_UPDATE로 반복을 막는다.
 // 실패하면 지금 버전으로 그대로 실행한다.
 let env = ProcessInfo.processInfo.environment
@@ -134,12 +138,12 @@ let failedMark = configDir.appendingPathComponent("auto-update-failed")
 let failedRecently = ((try? FileManager.default.attributesOfItem(atPath: failedMark.path))?[.modificationDate] as? Date)
   .map { Date().timeIntervalSince($0) < 86400 } ?? false   // 실패하면 하루 동안은 다시 시도하지 않는다
 if !CommandLine.arguments.contains("--demo"), env["NUNCHI_NO_AUTO_UPDATE"] == nil, env["NUNCHI_SKIP_AUTO_UPDATE"] == nil, !failedRecently,
-   let latest = latestVersion(timeout: 3), isNewer(latest, than: version), let src = sourceDir() {
+   let latest = latestVersion(cachedOnly: true), isNewer(latest, than: version), let src = sourceDir() {
   print("nunchi v\(latest)이 나와서 자동으로 업데이트합니다. (끄려면 NUNCHI_NO_AUTO_UPDATE=1)")
   fflush(stdout)
   let me = Bundle.main.executablePath ?? CommandLine.arguments[0]
   let script = """
-    cd "$1" && git pull --ff-only && ./install.sh && echo "업데이트 완료. 새 버전으로 시작합니다." && exec env NUNCHI_SKIP_AUTO_UPDATE=1 nunchi
+    cd "$1" && git pull --ff-only && ./install.sh && echo "업데이트 완료. 새 버전으로 시작합니다." && exec env NUNCHI_SKIP_AUTO_UPDATE=1 NUNCHI_UPDATED_FROM=\(version) nunchi
     touch "$3"
     echo "자동 업데이트에 실패했습니다. 지금 버전(v\(version))으로 시작합니다. (nunchi --update로 다시 시도)"
     exec env NUNCHI_SKIP_AUTO_UPDATE=1 "$2"
@@ -1211,7 +1215,7 @@ func draw() {
   // 왼쪽 제목: 방 개수와 안 읽은 총합 / 오른쪽 제목: 방 이름 · 인원 · 오픈채팅 … 자동 닫기 카운트다운
   let roomCount = nameIndex.isEmpty ? roomList.count : nameIndex.count
   let leftTitle = " 채팅 \(roomCount)" + (totalUnread.isEmpty || totalUnread == "0" ? "" : " · 안 읽음 \(totalUnread)")
-  var titlePlain = "nunchi", title = "\(dim)nunchi\(reset)"
+  var titlePlain = "nunchi v\(version)", title = "\(dim)nunchi v\(version)\(reset)"
   if let name = currentName {
     let info = roomList.first { $0.name == name }
     let extra = [info?.members.map { "\($0)명" }, info?.openChat == true ? "오픈채팅" : nil].compactMap { $0 }
@@ -1220,7 +1224,8 @@ func draw() {
   }
   var titleRight = "", titleRightPlain = ""
   if let v = newVersion {
-    titleRightPlain = "새 버전 v\(v) · nunchi --update"; titleRight = "\(yellow)\(titleRightPlain)\(reset)"
+    let autoOn = ProcessInfo.processInfo.environment["NUNCHI_NO_AUTO_UPDATE"] == nil && sourceDir() != nil
+    titleRightPlain = "새 버전 v\(v) · " + (autoOn ? "다음 실행 때 자동 업데이트" : "nunchi --update"); titleRight = "\(yellow)\(titleRightPlain)\(reset)"
   } else if currentName != nil && idleSeconds > 0 {
     let left = max(0, Int(idleSeconds - Date().timeIntervalSince(lastInputAt)))
     titleRightPlain = String(format: "자동 닫기 %d:%02d", left / 60, left % 60); titleRight = "\(dim)\(titleRightPlain)\(reset)"
@@ -1418,6 +1423,9 @@ func runDemo() -> Never {
 // MARK: - main
 
 if demo { runDemo() }
+if let from = ProcessInfo.processInfo.environment["NUNCHI_UPDATED_FROM"], from != version {
+  status = "v\(from) → v\(version)으로 업데이트했습니다. 바뀐 점: github.com/seo-minki/nunchi/releases"
+}
 Thread {
   if let v = latestVersion(), isNewer(v, than: version) { locked { newVersion = v; dirty = true } }
 }.start()
