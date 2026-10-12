@@ -61,7 +61,7 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-let version = "1.2.0"
+let version = "1.3.0"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
 // MARK: - 업데이트
@@ -350,13 +350,22 @@ func merge(_ old: [Message], _ new: [Message]) -> [Message] {
     let tail = old[i...]
     if zip(tail, new).allSatisfy(sameMessage) {
       let overlap = zip(tail, new).map(combine)
-      return Array((Array(old[..<i]) + overlap + Array(new.dropFirst(overlap.count))).suffix(500))
+      return Array((Array(old[..<i]) + overlap + Array(new.dropFirst(overlap.count))).suffix(2000))
     }
   }
   // new가 old 안에 통째로 들어 있으면(범위가 위로 밀린 경우) 그대로 둔다
   if let first = new.first, let j = old.firstIndex(where: { sameMessage($0, first) }),
      j + new.count <= old.count, zip(old[j...], new).allSatisfy(sameMessage) { return old }
   // 겹치는 곳이 없는데 새 목록이 훨씬 작으면 카톡이 행을 다시 불러오는 중인 것이다. 이전 대화를 버리지 않는다.
+  // 예전 메시지를 불러온 경우: new의 뒷부분이 old의 앞부분과 같으면 new의 앞쪽만 old 앞에 붙인다
+  if let first = old.first {
+    for j in new.indices where sameMessage(new[j], first) {
+      let tail = new[j...]
+      if zip(tail, old).allSatisfy(sameMessage) {
+        return Array((Array(new[..<j]) + Array(zip(old, tail).map { combine($0, $1) }) + Array(old.dropFirst(tail.count))).prefix(2000))
+      }
+    }
+  }
   if new.count < old.count / 2 { return old }
   return new
 }
@@ -742,7 +751,8 @@ func refreshOnce() {
       let rows = chatRows(win)
       let sig = chatSignature(rows)
       if sig != chatSig {
-        let msgs = messages(rows: rows)
+        // 예전 메시지를 불러와 행이 많아도, 새로고침은 마지막 30행만 읽고 이어 붙인다 (전체를 읽으면 몇 초씩 걸린다)
+        let msgs = messages(rows: Array(rows.suffix(30)))
         chatSig = sig
         locked { if let cw = currentWin, CFEqual(cw, win) { chat = merge(chat, msgs); dirty = true } }
       }
@@ -831,6 +841,52 @@ func scheduleRefresh() {
     refreshOnce()
     scheduleRefresh()
   }
+}
+
+// MARK: - 이전 메시지 불러오기
+// 카톡 채팅방 창의 세로 스크롤바를 맨 위(0)로 옮기면 카톡이 예전 메시지를 50개씩 더 불러온다.
+
+var loadingOlder = false
+var pendingScrollUp = 0              // 불러온 뒤 화면을 이만큼 위로 올려 새로 불러온 메시지를 보여 준다
+var prependedOlder = false           // 앞쪽에 붙인 줄은 "아래에 새 메시지"로 세지 않는다
+var atTop = false                    // 대화 칸이 맨 위까지 올라가 있는지 (그리기에서 갱신)
+
+func loadOlder(page: Int) {
+  guard let win = locked({ currentWin }), !locked({ loadingOlder }) else { return }
+  locked { loadingOlder = true; status = "이전 메시지 불러오는 중…"; dirty = true }
+  defer { locked { loadingOlder = false } }
+  guard let scroll = kids(win).first(where: { role($0) == "AXScrollArea" }),
+        let bar = kids(scroll).first(where: { role($0) == "AXScrollBar" }) else {
+    setStatus("이전 메시지를 불러올 수 없습니다."); return
+  }
+  let before = chatRows(win).count
+  AXUIElementSetAttributeValue(bar, "AXValue" as CFString, 0.0 as CFNumber)
+  var rows = chatRows(win)
+  for _ in 0..<20 where rows.count <= before { usleep(100_000); rows = chatRows(win) }
+  // 카톡 창은 다시 맨 아래로 돌려놓는다 (불러온 행은 그대로 남는다)
+  AXUIElementSetAttributeValue(bar, "AXValue" as CFString, 1.0 as CFNumber)
+  guard rows.count > before else { setStatus("더 불러올 이전 메시지가 없습니다."); return }
+  let msgs = messages(rows: rows)
+  locked {
+    guard let cw = currentWin, CFEqual(cw, win) else { return }
+    let old = chat.count
+    chat = merge(chat, msgs)
+    prependedOlder = true; pendingScrollUp = page
+    status = "이전 메시지 \(max(0, chat.count - old))개를 더 불러왔습니다."
+    dirty = true
+  }
+}
+
+/// 시작할 때 전체 방 이름을 읽어 둔다. 목록 아래쪽 방도 /검색이나 열기를 바로 할 수 있게.
+/// 한 번에 다 읽으면 그동안 방 열기·검색이 줄을 서서 기다리므로, 40개씩 나눠 사이사이 다른 작업이 끼어들게 한다.
+func preloadNames(from start: Int = 0) {
+  let rows = mainRows()
+  guard start < rows.count else { nextIndexPass = Date().addingTimeInterval(60); return }
+  var names = locked { nameIndex }
+  if names.count != rows.count { names = Array(repeating: "", count: rows.count) }
+  for i in start..<min(start + 40, rows.count) where names[i].isEmpty { names[i] = rowName(rows[i]) ?? "" }
+  locked { nameIndex = names }
+  ax.async { preloadNames(from: start + 40) }
 }
 
 // MARK: - 동작 (ax 큐에서 실행)
@@ -1132,12 +1188,18 @@ func draw() {
   }
   // 위로 올려 보는 중이면 새 줄이 생긴 만큼 같이 올려서 보던 위치를 유지한다
   if !helpScreen {
+    if prependedOlder {
+      // 예전 메시지가 위에 붙었다: 보던 위치는 그대로 두고, 요청한 만큼 위로 올려 새로 불러온 메시지를 보여 준다
+      lastChatLines = right.count; prependedOlder = false
+      scrollBack += pendingScrollUp; pendingScrollUp = 0
+    }
     if scrollBack > 0, right.count > lastChatLines, lastChatLines > 0 {
       scrollBack += right.count - lastChatLines
       newBelow = true
     }
     lastChatLines = right.count
     scrollBack = min(scrollBack, max(0, right.count - bodyH))
+    atTop = scrollBack >= max(0, right.count - bodyH)
     if scrollBack == 0 { newBelow = false }
     right = Array(right.dropLast(scrollBack).suffix(bodyH))
     right = Array(repeating: "", count: bodyH - right.count) + right
@@ -1202,7 +1264,7 @@ func helpLines() -> [String] {
     ("글 입력 + Enter", "열린 채팅방으로 전송"),
     ("/이름 + Enter", "채팅방 검색해서 열기"),
     ("@이름", "언급 (Tab 자동 완성)"),
-    ("Shift+↑ ↓", "대화 3줄씩 스크롤"),
+    ("Shift+↑ ↓", "대화 3줄씩 스크롤 (맨 위에서 더 올리면 이전 메시지)"),
     ("PageUp/Down (fn+↑↓)", "대화 반 화면씩 스크롤"),
     ("End (fn+→)", "대화 맨 아래로"),
     ("Esc", "채팅방 닫기 (읽음 처리 멈춤)"),
@@ -1254,9 +1316,10 @@ func handle(_ bytes: [UInt8]) {
           switch seq {
           case "A": cursor = max(0, cursor - 1)                          // ↑ 방 고르기
           case "B": cursor = min(roomList.count - 1, cursor + 1)         // ↓
-          case "1;2A": scrollBack += 3                                   // Shift+↑ 대화 위로
+          case "1;2A", "5~":                                             // Shift+↑ / PageUp: 대화 위로
+            if atTop && currentName != nil { let p = seq == "5~" ? page : 3; ax.async { loadOlder(page: p) } }
+            else { scrollBack += seq == "5~" ? page : 3 }
           case "1;2B": scrollBack = max(0, scrollBack - 3)               // Shift+↓
-          case "5~": scrollBack += page                                  // PageUp (fn+↑)
           case "6~": scrollBack = max(0, scrollBack - page)              // PageDown (fn+↓)
           case "F", "4~", "8~": scrollBack = 0                           // End (fn+→)
           default: break
@@ -1360,7 +1423,7 @@ Thread {
 }.start()
 rawMode()
 locked { draw() }
-ax.async { refreshOnce() }
+ax.async { refreshOnce(); preloadNames() }
 scheduleRefresh()
 startObserver()
 var buf = [UInt8](repeating: 0, count: 1024)
