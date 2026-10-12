@@ -61,7 +61,7 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-let version = "0.5.5"
+let version = "1.0.0"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
 // MARK: - 업데이트
@@ -951,15 +951,25 @@ func draw() {
   if roomList.isEmpty { left = [" \(dim)\(fit("목록 읽는 중…", leftW - 1))\(reset)"] }
 
   // 오른쪽: 대화 (아래쪽 정렬)
+  // 같은 사람이 이어서 보낸 메시지는 이름 줄을 한 번만 쓰고, 시간·안 읽은 수는 오른쪽 칸에 둔다.
+  // 내 메시지는 이름 줄 없이 "> "로 시작한다 (AI 도구의 사용자 입력처럼).
   var right: [String] = []
+  let gutter = 10
+  let textW = max(10, rightW - 2 - gutter)
+  var lastKey: String?, lastTime = ""
   for m in chat {
-    let unread = m.unread > 0 ? " \(yellow)\(m.unread)\(reset)" : ""
-    if m.mine {
-      right.append("\(cyan)❯\(reset) \(bold)나\(reset) \(dim)\(m.time)\(reset)\(unread)")
-      for l in linkedLines(m.body, rightW - 2) { right.append("  \(cyan)\(l)\(reset)") }
-    } else {
-      right.append("\(orange)⏺\(reset) \(bold)\(m.sender)\(reset) \(dim)\(m.time)\(reset)\(unread)")
-      for l in linkedLines(m.body, rightW - 2) { right.append("  \(l)") }
+    let key = m.mine ? "\u{0}나" : m.sender
+    let newGroup = key != lastKey
+    if newGroup && !m.mine { right.append("\(orange)⏺\(reset) \(bold)\(m.sender)\(reset)") }
+    let showTime = newGroup || m.time != lastTime
+    lastKey = key; lastTime = m.time
+    let metaPlain = [showTime ? m.time : nil, m.unread > 0 ? String(m.unread) : nil].compactMap { $0 }.joined(separator: " ")
+    let metaStyled = [showTime ? "\(dim)\(m.time)\(reset)" : nil, m.unread > 0 ? "\(yellow)\(m.unread)\(reset)" : nil].compactMap { $0 }.joined(separator: " ")
+    let meta = String(repeating: " ", count: max(0, gutter - width(metaPlain))) + metaStyled
+    for (i, l) in linkedLines(m.body, textW).enumerated() {
+      let lead = m.mine ? (i == 0 ? "\(cyan)>\(reset) " : "  ") : "  "
+      let text = m.mine ? "\(cyan)\(l)\(reset)" : l
+      right.append(lead + text + (i == 0 ? meta : ""))
     }
   }
   let helpScreen = showHelp || currentName == nil
@@ -1008,9 +1018,16 @@ func draw() {
   s += "\(dim)\(String(repeating: "─", count: leftW + 1))┴─ \(fit(hint, rightW - 1))\(reset)\u{1B}[K\r\n"
 
   // 입력줄: 오른쪽 끝이 넘치면 뒷부분만 보여준다
+  // 엉뚱한 방에 보내지 않도록 보낼 방 이름을 프롬프트 앞에 붙인다
+  var prompt = "\(cyan)❯\(reset) ", promptW = 2
+  if let name = currentName {
+    var n = name
+    if width(n) > 14 { n = fit(name, 13); while n.hasSuffix(" ") { n.removeLast() }; n += "…" }
+    prompt = "\(dim)\(n)\(reset) \(cyan)❯\(reset) "; promptW = width(n) + 3
+  }
   var shown = String(inputBuf)
-  while width(shown) > cols - 4 { shown.removeFirst() }
-  s += "\(cyan)❯\(reset) \(shown)\u{1B}[K"
+  while width(shown) > cols - 2 - promptW { shown.removeFirst() }
+  s += "\(prompt)\(shown)\u{1B}[K"
   out(s)
   dirty = false
 }
@@ -1151,7 +1168,9 @@ func runDemo() -> Never {
   currentName = "개발 스터디"
   chat = [
     Message(sender: "김철수", time: "11:52", body: "오늘 스터디 몇 시에 시작해요?", mine: false),
+    Message(sender: "김철수", time: "11:52", body: "장소는 지난번이랑 같나요?", mine: false),
     Message(sender: "이영희", time: "11:53", body: "저녁 8시요! 장소는 지난번이랑 같아요", mine: false),
+    Message(sender: "이영희", time: "11:53", body: "자료는 여기 올려 뒀어요 naver.me/xAbC12", mine: false),
     Message(sender: "나", time: "11:55", body: "저 발표 자료 거의 다 만들었어요", mine: true),
     Message(sender: "나", time: "11:55", body: "터미널에서 카톡 보내는 거 데모로 보여 드릴게요 🙂", mine: true, unread: 1),
     Message(sender: "김철수", time: "11:58", body: "오 기대된다 ㅋㅋ\n혹시 노트북 충전기 있으신 분?", mine: false, unread: 2),
