@@ -61,7 +61,7 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-let version = "1.3.1"
+let version = "1.3.2"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
 // MARK: - 업데이트
