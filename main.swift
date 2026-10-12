@@ -61,7 +61,7 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-let version = "1.0.0"
+let version = "1.1.0"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
 // MARK: - 업데이트
@@ -175,16 +175,18 @@ func unreadTotal() -> String {
   return cachedUnreadTotal.flatMap { str($0, "AXValue") } ?? ""
 }
 
-struct Room { let name: String; let unread: Int; var last = ""; var time = ""; var unreadPlus = false }
+struct Room { let name: String; let unread: Int; var last = ""; var time = ""; var unreadPlus = false; var members: Int? = nil; var openChat = false }
 
 /// 목록 한 줄: 이름, 안 읽은 수, 마지막 메시지 미리보기와 시간.
 /// 미리보기는 방을 열지 않고 엿볼 수 있게 읽는다 (목록에서 읽는 건 읽음 처리되지 않는다).
 func room(_ row: AXUIElement) -> Room? {
   guard let cell = kids(row).first else { return nil }
-  var name = "", unread = 0, last = "", time = "", plus = false
+  var name = "", unread = 0, last = "", time = "", plus = false, members: Int?, openChat = false
   for k in kids(cell) {
     let n = node(k)
     if n.role == "AXScrollArea" { last = kids(n.el).first.flatMap { str($0, "AXValue") } ?? "" }
+    if n.role == "AXImage", n.desc == "badge openchat room" { openChat = true }
+    if n.id == "Count Label" { members = Int(n.value) }
     guard n.role == "AXStaticText" else { continue }
     if n.id == "_NS:40" { name = n.value }
     if n.id == "_NS:69" { time = n.value }
@@ -193,7 +195,8 @@ func room(_ row: AXUIElement) -> Room? {
       unread = u; plus = n.value.hasSuffix("+")
     }
   }
-  return name.isEmpty ? nil : Room(name: name, unread: unread, last: last, time: time, unreadPlus: plus)
+  return name.isEmpty ? nil : Room(name: name, unread: unread, last: last, time: time, unreadPlus: plus,
+                                   members: members, openChat: openChat)
 }
 
 /// 이름만 필요할 때: 이름 칸을 찾는 즉시 멈춘다
@@ -401,7 +404,7 @@ func messages(rows: [AXUIElement]) -> [Message] {
     // 그래서 시간이 없어도 말풍선(글·사진)이 있으면 메시지로 보고, 날짜 구분선처럼 말풍선이 없는 행만 건너뛴다.
     if time.isEmpty && bodyFrame == nil { continue }
     var body = bodies.joined(separator: "\n")
-    if body.isEmpty { body = hasImage ? "[사진/이모티콘]" : "[첨부]" }
+    if body.isEmpty { body = (hasImage ? "▣ 사진·이모티콘" : "▣ 첨부") + " · Ctrl+O로 보기" }
     // 내 메시지는 오른쪽 정렬: 말풍선 오른쪽 끝이 셀 오른쪽 끝에 붙어 있다
     let cellFrame = node(cellEl).frame
     let mine = !hasProfile && sender.isEmpty && bodyFrame.map { cellFrame.maxX - $0.maxX < 40 } == true
@@ -624,14 +627,14 @@ func linkedLines(_ s: String, _ w: Int) -> [String] {
       for k in start..<(start + text[r].count) { tag[k] = urls.count - 1 }
     }
     var line = "", used = 0, open = -1
-    func closeLink() { if open >= 0 { line += "\u{1B}]8;;\u{1B}\\"; open = -1 } }
+    func closeLink() { if open >= 0 { line += "\u{1B}[24m\u{1B}]8;;\u{1B}\\"; open = -1 } }
     func endLine() { closeLink(); out.append(line + String(repeating: " ", count: max(0, w - used))); line = ""; used = 0 }
     for (k, c) in chars.enumerated() {
       let cw = width(c)
       if used + cw > w { endLine() }
       if tag[k] != open {
         closeLink()
-        if tag[k] >= 0 { line += "\u{1B}]8;;\(urls[tag[k]])\u{1B}\\"; open = tag[k] }
+        if tag[k] >= 0 { line += "\u{1B}]8;;\(urls[tag[k]])\u{1B}\\\u{1B}[4m"; open = tag[k] }
       }
       line.append(c); used += cw
     }
@@ -685,6 +688,8 @@ var inputBuf: [Character] = []
 var status = ""
 var busy = false                     // 방 열기·전송 중
 var dirty = true                     // 다시 그려야 함
+var totalUnread = ""                 // 카톡 메인 창의 안 읽은 메시지 총합 ("55", "999+" 등)
+var lastIdleSecond = -1              // 제목줄 자동 닫기 카운트다운을 1초마다 다시 그리려고
 var showHelp = false                 // "/?"로 연 단축키 목록
 var newVersion: String?             // GitHub에 더 새 버전이 있으면 그 번호
 var lastInputAt = Date()             // 마지막 키 입력 시각 (자동 닫기용)
@@ -728,7 +733,9 @@ func refreshOnce() {
   }
 
   let rows = mainRows()
-  let sig = "\(unreadTotal())|\(rows.count)|\(rows.first.flatMap(rowName) ?? "")"
+  let total = unreadTotal()
+  locked { if totalUnread != total { totalUnread = total; dirty = true } }
+  let sig = "\(total)|\(rows.count)|\(rows.first.flatMap(rowName) ?? "")"
   var names = locked { nameIndex }
   if names.count != rows.count { names = Array(repeating: "", count: rows.count) }
   var list: [Room]?
@@ -939,14 +946,12 @@ func draw() {
     let r = roomList[i]
     let badge = r.unread > 0 ? " \(r.unread)\(r.unreadPlus ? "+" : "")" : ""
     let name = fit(r.name, leftW - 2 - width(badge))
-    let marker = r.name == currentName ? "\(orange)▍\(reset)" : " "
-    if i == cursor {
-      left.append("\(marker)\u{1B}[7m \(name)\(badge)\(reset)")
-    } else if r.unread > 0 {
-      left.append("\(marker) \(bold)\(name)\(reset)\(orange)\(badge)\(reset)")
-    } else {
-      left.append("\(marker) \(name)")
-    }
+    // 열린 방: 주황 ▸ + 굵게 / 커서: 은은한 배경 (반전 색은 너무 강해서 쓰지 않는다)
+    let isOpen = r.name == currentName
+    let marker = isOpen ? "\(orange)▸\(reset)" : " "
+    let bg = i == cursor ? "\u{1B}[100m" : ""
+    let nameStyle = isOpen || r.unread > 0 ? bold : ""
+    left.append("\(marker)\(bg) \(nameStyle)\(name)\(reset)\(bg)\(orange)\(badge)\(reset)")
   }
   if roomList.isEmpty { left = [" \(dim)\(fit("목록 읽는 중…", leftW - 1))\(reset)"] }
 
@@ -968,7 +973,8 @@ func draw() {
     let meta = String(repeating: " ", count: max(0, gutter - width(metaPlain))) + metaStyled
     for (i, l) in linkedLines(m.body, textW).enumerated() {
       let lead = m.mine ? (i == 0 ? "\(cyan)>\(reset) " : "  ") : "  "
-      let text = m.mine ? "\(cyan)\(l)\(reset)" : l
+      let attach = m.body.hasPrefix("▣ ")
+      let text = attach ? "\(dim)\(l)\(reset)" : m.mine ? "\(cyan)\(l)\(reset)" : l
       right.append(lead + text + (i == 0 ? meta : ""))
     }
   }
@@ -1000,9 +1006,25 @@ func draw() {
   }
 
   var s = "\u{1B}[H"
-  var title = currentName.map { "\(bold)\($0)\(reset)" } ?? "\(dim)nunchi\(reset)"
-  if let v = newVersion { title += "  \(yellow)새 버전 v\(v) 있음 · nunchi --update\(reset)" }
-  s += "\(dim)\(fit(" sessions", leftW))\(reset) │ \(title)\u{1B}[K\r\n"
+  // 왼쪽 제목: 방 개수와 안 읽은 총합 / 오른쪽 제목: 방 이름 · 인원 · 오픈채팅 … 자동 닫기 카운트다운
+  let roomCount = nameIndex.isEmpty ? roomList.count : nameIndex.count
+  let leftTitle = " 채팅 \(roomCount)" + (totalUnread.isEmpty || totalUnread == "0" ? "" : " · 안 읽음 \(totalUnread)")
+  var titlePlain = "nunchi", title = "\(dim)nunchi\(reset)"
+  if let name = currentName {
+    let info = roomList.first { $0.name == name }
+    let extra = [info?.members.map { "\($0)명" }, info?.openChat == true ? "오픈채팅" : nil].compactMap { $0 }
+    titlePlain = name + extra.map { " · " + $0 }.joined()
+    title = "\(bold)\(name)\(reset)\(dim)\(extra.map { " · " + $0 }.joined())\(reset)"
+  }
+  var titleRight = "", titleRightPlain = ""
+  if let v = newVersion {
+    titleRightPlain = "새 버전 v\(v) · nunchi --update"; titleRight = "\(yellow)\(titleRightPlain)\(reset)"
+  } else if currentName != nil && idleSeconds > 0 {
+    let left = max(0, Int(idleSeconds - Date().timeIntervalSince(lastInputAt)))
+    titleRightPlain = String(format: "자동 닫기 %d:%02d", left / 60, left % 60); titleRight = "\(dim)\(titleRightPlain)\(reset)"
+  }
+  let gap = max(1, rightW - width(titlePlain) - width(titleRightPlain))
+  s += "\(dim)\(fit(leftTitle, leftW))\(reset) │ \(title)\(String(repeating: " ", count: gap))\(titleRight)\u{1B}[K\r\n"
   for i in 0..<bodyH {
     let l = i < left.count ? left[i] : String(repeating: " ", count: leftW)
     let r = i < right.count ? right[i] : ""
@@ -1159,18 +1181,20 @@ func enter() {
 func runDemo() -> Never {
   fixedSize = (rows: 20, cols: 96)
   roomList = [
-    Room(name: "개발 스터디", unread: 0), Room(name: "김철수", unread: 2), Room(name: "주말 등산 모임", unread: 12),
+    Room(name: "개발 스터디", unread: 0, members: 12), Room(name: "김철수", unread: 2), Room(name: "주말 등산 모임", unread: 12, members: 87, openChat: true),
     Room(name: "가족", unread: 0), Room(name: "이영희", unread: 0), Room(name: "회사 동기", unread: 5),
     Room(name: "나와의 채팅", unread: 0), Room(name: "박민수", unread: 0), Room(name: "대학 동아리", unread: 128),
     Room(name: "최지우", unread: 0), Room(name: "택배 알림", unread: 1),
   ]
-  cursor = 0
+  cursor = 2
+  totalUnread = "148"
   currentName = "개발 스터디"
   chat = [
     Message(sender: "김철수", time: "11:52", body: "오늘 스터디 몇 시에 시작해요?", mine: false),
     Message(sender: "김철수", time: "11:52", body: "장소는 지난번이랑 같나요?", mine: false),
     Message(sender: "이영희", time: "11:53", body: "저녁 8시요! 장소는 지난번이랑 같아요", mine: false),
     Message(sender: "이영희", time: "11:53", body: "자료는 여기 올려 뒀어요 naver.me/xAbC12", mine: false),
+    Message(sender: "이영희", time: "11:53", body: "▣ 사진·이모티콘 · Ctrl+O로 보기", mine: false),
     Message(sender: "나", time: "11:55", body: "저 발표 자료 거의 다 만들었어요", mine: true),
     Message(sender: "나", time: "11:55", body: "터미널에서 카톡 보내는 거 데모로 보여 드릴게요 🙂", mine: true, unread: 1),
     Message(sender: "김철수", time: "11:58", body: "오 기대된다 ㅋㅋ\n혹시 노트북 충전기 있으신 분?", mine: false, unread: 2),
@@ -1208,8 +1232,8 @@ while true {
       closeRoom()
       let span = idleSeconds >= 60 ? "\(Int(idleSeconds / 60))분" : "\(Int(idleSeconds))초"
       setStatus("\(span) 동안 입력이 없어 방을 닫았습니다. 이제 읽음 처리되지 않습니다.")
-    } else if open, idleSeconds > 0, idle > idleSeconds - 21 {
-      locked { dirty = true }   // 카운트다운 안내 갱신
+    } else if open, idleSeconds > 0, Int(idle) != locked({ lastIdleSecond }) {
+      locked { lastIdleSecond = Int(idle); dirty = true }   // 카운트다운 갱신
     }
     locked { if dirty { draw() } }
   }
