@@ -61,7 +61,7 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-let version = "1.1.0"
+let version = "1.2.0"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
 // MARK: - 업데이트
@@ -102,7 +102,7 @@ func isNewer(_ a: String, than b: String) -> Bool {
 
 /// GitHub의 최신 버전 태그. 하루에 한 번만 확인하고 결과를 기억해 둔다.
 /// 버전 태그 목록만 받아 오고 카카오톡 데이터는 아무것도 보내지 않는다.
-func latestVersion() -> String? {
+func latestVersion(timeout: Double = 8) -> String? {
   if ProcessInfo.processInfo.environment["NUNCHI_NO_UPDATE_CHECK"] != nil { return nil }
   guard let src = sourceDir() else { return nil }
   let stamp = configDir.appendingPathComponent("latest-version")
@@ -116,7 +116,7 @@ func latestVersion() -> String? {
   p.standardOutput = pipe
   p.standardError = FileHandle.nullDevice
   guard (try? p.run()) != nil else { return nil }
-  DispatchQueue.global().asyncAfter(deadline: .now() + 8) { if p.isRunning { p.terminate() } }
+  DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if p.isRunning { p.terminate() } }
   p.waitUntilExit()
   guard p.terminationStatus == 0 else { return nil }
   let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
@@ -124,6 +124,30 @@ func latestVersion() -> String? {
   guard let best = tags.max(by: { isNewer($1, than: $0) }) else { return nil }
   try? best.write(to: stamp, atomically: true, encoding: .utf8)
   return best
+}
+
+// 시작할 때 새 버전이 있으면 자동으로 업데이트한 뒤 새 버전으로 다시 실행한다.
+// NUNCHI_NO_AUTO_UPDATE=1이면 끄고, 다시 실행된 프로세스는 NUNCHI_SKIP_AUTO_UPDATE로 반복을 막는다.
+// 실패하면 지금 버전으로 그대로 실행한다.
+let env = ProcessInfo.processInfo.environment
+let failedMark = configDir.appendingPathComponent("auto-update-failed")
+let failedRecently = ((try? FileManager.default.attributesOfItem(atPath: failedMark.path))?[.modificationDate] as? Date)
+  .map { Date().timeIntervalSince($0) < 86400 } ?? false   // 실패하면 하루 동안은 다시 시도하지 않는다
+if !CommandLine.arguments.contains("--demo"), env["NUNCHI_NO_AUTO_UPDATE"] == nil, env["NUNCHI_SKIP_AUTO_UPDATE"] == nil, !failedRecently,
+   let latest = latestVersion(timeout: 3), isNewer(latest, than: version), let src = sourceDir() {
+  print("nunchi v\(latest)이 나와서 자동으로 업데이트합니다. (끄려면 NUNCHI_NO_AUTO_UPDATE=1)")
+  fflush(stdout)
+  let me = Bundle.main.executablePath ?? CommandLine.arguments[0]
+  let script = """
+    cd "$1" && git pull --ff-only && ./install.sh && echo "업데이트 완료. 새 버전으로 시작합니다." && exec env NUNCHI_SKIP_AUTO_UPDATE=1 nunchi
+    touch "$3"
+    echo "자동 업데이트에 실패했습니다. 지금 버전(v\(version))으로 시작합니다. (nunchi --update로 다시 시도)"
+    exec env NUNCHI_SKIP_AUTO_UPDATE=1 "$2"
+    """
+  var args: [UnsafeMutablePointer<CChar>?] = []
+  for a in ["sh", "-c", script, "sh", src, me, failedMark.path] { args.append(strdup(a)) }
+  args.append(nil)
+  execv("/bin/sh", args)   // 포그라운드에서 실행해야 sudo 비밀번호 입력이 된다
 }
 
 // --demo: 카톡에 연결하지 않고 가짜 데이터로 화면을 한 번 그린다 (README 스크린샷용)
@@ -930,10 +954,126 @@ func mentionCandidates() -> (query: String, names: [String])? {
   return (q, names)
 }
 
+// MARK: - 보스 키 (눈치 모드)
+// 백틱(`)을 누르면 화면 전체가 AI 코딩 도구 작업 화면으로 바뀐다. 다시 백틱을 눌러야 돌아온다.
+// 들어가는 순간 채팅방을 닫아 읽음 처리를 멈추고, 새 메시지는 "git fetch" 결과처럼 숨겨서 알려 준다.
+
+var bossMode = false
+var bossStart = Date()
+var bossBaseUnread = 0               // 보스 화면에 들어갈 때의 안 읽은 총합
+
+/// 그럴듯한 작업 기록. 한 줄씩 시간을 두고 나타나고, 끝나면 처음부터 다시 돈다.
+let bossScript: [String] = [
+  "> 로그인 API 응답이 느린 원인 찾아서 고쳐줘",
+  "",
+  "⏺ Read(src/api/auth/session.ts)",
+  "  ⎿  Read 142 lines",
+  "",
+  "⏺ Search(pattern: \"refreshToken\", path: \"src/\")",
+  "  ⎿  Found 7 files",
+  "",
+  "⏺ Read(src/api/auth/middleware.ts)",
+  "  ⎿  Read 88 lines",
+  "",
+  "⏺ 요청마다 세션 토큰을 다시 검증하면서 DB를 두 번 조회하고 있습니다.",
+  "  검증 결과를 요청 범위에서 캐시하면 응답이 평균 300ms 정도 줄어들 것 같습니다.",
+  "",
+  "⏺ Update(src/api/auth/middleware.ts)",
+  "  ⎿  Updated src/api/auth/middleware.ts with 12 additions and 4 removals",
+  "",
+  "⏺ Bash(npm test -- auth)",
+  "  ⎿  PASS  src/api/auth/__tests__/session.test.ts",
+  "     PASS  src/api/auth/__tests__/middleware.test.ts",
+  "     Tests: 38 passed, 38 total",
+  "",
+  "⏺ 수정했습니다. 토큰 검증 결과를 요청 단위로 캐시하도록 바꿨고, 관련 테스트 38개가 모두 통과합니다.",
+  "",
+  "> 같은 방식으로 프로필 API도 확인해줘",
+  "",
+  "⏺ Read(src/api/profile/index.ts)",
+  "  ⎿  Read 211 lines",
+  "",
+  "⏺ Search(pattern: \"getUserById\", path: \"src/api/profile\")",
+  "  ⎿  Found 4 files",
+  "",
+  "⏺ 프로필 조회에서도 같은 사용자를 한 요청 안에서 세 번 불러오고 있습니다. 한 번만 불러오도록 정리하겠습니다.",
+  "",
+  "⏺ Update(src/api/profile/index.ts)",
+  "  ⎿  Updated src/api/profile/index.ts with 9 additions and 15 removals",
+  "",
+  "⏺ Bash(npm run lint && npm test -- profile)",
+  "  ⎿  ✔ No lint errors",
+  "     Tests: 21 passed, 21 total",
+  "",
+  "⏺ 완료했습니다. 중복 조회를 없애서 프로필 API 쿼리가 3회에서 1회로 줄었습니다.",
+  "",
+]
+
+/// 줄마다 1.2~2.8초 간격으로 나타나게 하는 누적 시각 (매번 같은 리듬)
+let bossTimes: [Double] = {
+  var t = 0.0, out: [Double] = []
+  for (i, line) in bossScript.enumerated() {
+    out.append(t)
+    t += line.isEmpty ? 0.4 : 1.2 + Double((i * 37) % 17) / 10
+  }
+  return out
+}()
+let bossCycle = (bossTimes.last ?? 0) + 6
+
+func toggleBoss() {
+  let entering = locked { !bossMode }
+  if entering {
+    closeRoom()
+    locked {
+      bossMode = true; bossStart = Date(); status = ""
+      bossBaseUnread = Int(totalUnread.filter(\.isNumber)) ?? 0
+      dirty = true
+    }
+  } else {
+    locked { bossMode = false; status = ""; dirty = true }
+  }
+}
+
+/// 보스 화면 그리기 (lock 안에서 호출)
+func drawBoss(rows: Int, cols: Int) -> String {
+  let elapsed = Date().timeIntervalSince(bossStart)
+  let loops = Int(elapsed / bossCycle), t = elapsed.truncatingRemainder(dividingBy: bossCycle)
+  var lines: [String] = []
+  // 앞선 바퀴의 기록도 위에 남겨 두어 오래 켜 둔 화면처럼 보이게 한다
+  for _ in 0..<min(loops, 2) { lines += bossScript }
+  lines += zip(bossScript, bossTimes).filter { $0.1 <= t }.map(\.0)
+  // 새 메시지는 git fetch 결과처럼 숨긴다
+  let fresh = (Int(totalUnread.filter(\.isNumber)) ?? 0) - bossBaseUnread
+  if fresh > 0 {
+    if lines.last?.isEmpty == false { lines.append("") }
+    lines += ["⏺ Bash(git fetch origin)", "  ⎿  \(fresh) new commit\(fresh == 1 ? "" : "s") on origin/main", ""]
+  }
+
+  let styled = lines.map { l -> String in
+    let body = fit(l, cols - 1)
+    if l.hasPrefix("> ") { return "\(bold)\(body)\(reset)" }
+    if l.hasPrefix("⏺ ") { return "\(orange)⏺\(reset)" + String(body.dropFirst()) }
+    if l.hasPrefix("  ⎿") || l.hasPrefix("     ") { return "\(dim)\(body)\(reset)" }
+    return body
+  }
+  let spin = ["✻", "✶", "✳", "✢", "·", "✢", "✳", "✶"][Int(elapsed * 4) % 8]
+  let verb = ["Thinking", "Analyzing", "Reading", "Planning"][Int(elapsed / 9) % 4]
+  let bodyH = rows - 4
+  var view = Array(styled.suffix(bodyH))
+  view = Array(repeating: String(repeating: " ", count: cols - 1), count: max(0, bodyH - view.count)) + view
+  var s = "\u{1B}[H"
+  for l in view { s += "\(l)\u{1B}[K\r\n" }
+  s += "\(orange)\(spin)\(reset) \(dim)\(verb)… (esc to interrupt)\(reset)\u{1B}[K\r\n"
+  s += "\(dim)\(String(repeating: "─", count: cols - 1))\(reset)\u{1B}[K\r\n"
+  s += "\(bold)>\(reset) \u{1B}[K"
+  return s
+}
+
 // MARK: - 그리기 (메인 스레드, lock 안에서 호출)
 
 func draw() {
   let (rows, cols) = termSize()
+  if bossMode { out(drawBoss(rows: rows, cols: cols)); dirty = false; return }
   let leftW = min(30, cols / 3)
   let rightW = cols - leftW - 3
   let bodyH = rows - 3      // 헤더 1줄 + 입력 구분선 1줄 + 입력 1줄
@@ -1069,6 +1209,7 @@ func helpLines() -> [String] {
     ("Ctrl+O", "카톡 창 맨 앞으로 (사진 보기)"),
     ("Ctrl+U", "입력줄 지우기"),
     ("/?", "이 목록 보기"),
+    ("` (백틱)", "보스 키: AI 작업 화면으로 위장"),
     ("Ctrl+C", "종료"),
   ]
   return ["", "  \(bold)단축키\(reset)", ""] + keys.map { "  \(cyan)\(fit($0.0, 22))\(reset) \($0.1)" }
@@ -1089,6 +1230,11 @@ func pendingInput(waitMs: Int32) -> [UInt8] {
 
 func handle(_ bytes: [UInt8]) {
   locked { lastInputAt = Date() }
+  // 보스 키: 백틱(`), 한글 입력 상태에서는 같은 키가 "₩"로 들어온다
+  let isBossKey = bytes == [0x60] || bytes == [0xE2, 0x82, 0xA9]
+  if isBossKey { toggleBoss(); return }
+  // 보스 화면에서는 백틱과 Ctrl+C 말고는 모두 무시한다 (실수로 카톡 화면이 튀어나오지 않게)
+  if locked({ bossMode }) { if bytes.contains(3) { shutdown() }; return }
   // 단축키 목록은 아무 키나 누르면 닫는다 (그 키는 소비한다)
   if locked({ showHelp }) { locked { showHelp = false; dirty = true }; return }
   var i = 0
@@ -1235,6 +1381,7 @@ while true {
     } else if open, idleSeconds > 0, Int(idle) != locked({ lastIdleSecond }) {
       locked { lastIdleSecond = Int(idle); dirty = true }   // 카운트다운 갱신
     }
+    if locked({ bossMode }) { locked { dirty = true } }   // 보스 화면 애니메이션
     locked { if dirty { draw() } }
   }
 }
