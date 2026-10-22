@@ -61,7 +61,7 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-let version = "1.3.3"
+let version = "1.4.0"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
 // MARK: - 업데이트
@@ -265,10 +265,13 @@ func close(_ win: AXUIElement) {
 func open(_ name: String, hint: Int?) -> AXUIElement? {
   if let w = roomWindow(name) { return w }
   guard let main = mainWindow(), focus(main), let table = mainTable() else { return nil }
+  trace("메인 창 포커스")
   let rows = mainRows()
   var order = Array(rows.indices)
   if let hint, rows.indices.contains(hint) { order.insert(hint, at: 0) }
-  guard let i = order.first(where: { rowName(rows[$0]) == name }) else { return nil }
+  var tried = 0
+  guard let i = order.first(where: { tried += 1; return rowName(rows[$0]) == name }) else { return nil }
+  trace("행 찾기 (\(tried)개 확인, 전체 \(rows.count)행, 힌트 \(hint.map(String.init) ?? "없음"))")
   let row = rows[i]
   AXUIElementSetAttributeValue(row, "AXSelected" as CFString, kCFBooleanTrue)
   usleep(80_000)
@@ -276,10 +279,11 @@ func open(_ name: String, hint: Int?) -> AXUIElement? {
   guard selected.count == 1, same(selected[0], row), rowName(row) == name,
         same(attr(app, "AXFocusedWindow"), main) else { return nil }
   let before = Set(windows().map(\.title))
+  trace("행 선택 확인")
   pressEnter()
-  for _ in 0..<30 {
+  for k in 0..<30 {
     usleep(100_000)
-    if let w = roomWindow(name) { return w }
+    if let w = roomWindow(name) { trace("창 뜸 (\(k + 1)번째 확인)"); return w }
   }
   // 엉뚱한 방이 열렸으면 닫는다
   for w in windows() where w.id == "_NS:443" && !before.contains(w.title) { close(w.el) }
@@ -290,6 +294,17 @@ func open(_ name: String, hint: Int?) -> AXUIElement? {
 // 사용자가 옮겨 둔 위치를 기억한다. 저장된 위치가 없으면 카톡 메인 창 옆에 붙인다.
 
 let positionFile = configDir.appendingPathComponent("window-position")
+
+/// NUNCHI_TRACE=1이면 방 열기 단계별 시간을 ~/.config/nunchi/trace.log에 남긴다 (이름·내용은 남기지 않는다)
+let tracing = ProcessInfo.processInfo.environment["NUNCHI_TRACE"] != nil
+var traceStart = Date()
+func trace(_ step: String) {
+  guard tracing else { return }
+  let line = String(format: "%7.0fms  %@\n", Date().timeIntervalSince(traceStart) * 1000, step)
+  let url = configDir.appendingPathComponent("trace.log")
+  if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close() }
+  else { try? line.write(to: url, atomically: true, encoding: .utf8) }
+}
 
 func savedPosition() -> CGPoint? {
   guard let text = try? String(contentsOf: positionFile, encoding: .utf8) else { return nil }
@@ -329,7 +344,7 @@ func closeOurs(_ win: AXUIElement, _ ours: Bool) {
 
 // MARK: - 메시지
 
-struct Message: Equatable { let sender: String; var time: String; let body: String; let mine: Bool; var unread = 0 }
+struct Message: Equatable { var sender: String; var time: String; let body: String; let mine: Bool; var unread = 0 }
 
 /// 같은 메시지인지. 맨 위 행은 앞사람 이름이 잘려 이름이 비어 있을 수 있어 이름은 느슨하게 비교한다.
 func sameMessage(_ a: Message, _ b: Message) -> Bool {
@@ -389,64 +404,92 @@ func chatRows(_ win: AXUIElement) -> [AXUIElement] {
 /// 대화가 바뀌었는지 싸게 확인하기 위한 값: 행 개수 + 마지막 행 내용
 func chatSignature(_ rows: [AXUIElement]) -> String {
   guard let last = rows.last, let cell = kids(last).first else { return "\(rows.count)" }
-  return "\(rows.count)|" + kids(cell).map { node($0).value }.joined(separator: "|")
+  // 카드가 펼쳐진 행은 요소가 많아 앞쪽(프로필·이름·시간)만 본다
+  let items = kids(cell)
+  return "\(rows.count)|\(items.count)|" + (items.count > 10 ? Array(items.prefix(3)) : items).map { node($0).value }.joined(separator: "|")
 }
 
 func messages(_ win: AXUIElement) -> [Message] { messages(rows: chatRows(win)) }
 
-func messages(rows: [AXUIElement]) -> [Message] {
-  var result: [Message] = []
-  var lastSender = ""
-  for row in rows {
-    guard let cellEl = kids(row).first else { continue }
-    let items = kids(cellEl).map(node)
-    var time = "", bodies: [String] = [], bodyFrame: CGRect?, hasImage = false, unread = 0
-    var profile: CGRect?, texts: [Node] = []
-    for n in items {
-      switch n.role {
-      case "AXStaticText":
-        // 아직 안 읽은 사람이 있으면 "8\n11:58"처럼 안 읽은 수가 시간 앞에 붙는다
-        let lines = n.value.split(separator: "\n").map(String.init)
-        let last = lines.last ?? ""
-        if isTime(last) {
-          time = last
-          if lines.count > 1, let u = Int(lines[0]) { unread = u }
-        } else if let u = Int(n.value) {
-          unread = u   // 시간 없이 숫자만 따로 붙는 경우 (사진 등)
-        } else if !n.value.isEmpty {
-          texts.append(n)
-        }
-      case "AXTextArea":
-        bodies.append(n.value); bodyFrame = bodyFrame ?? n.frame
-      case "AXScrollArea":
-        bodies.append(contentsOf: kids(n.el).compactMap { str($0, "AXValue") }.filter { !$0.isEmpty })
-        bodyFrame = bodyFrame ?? n.frame
-      case "AXImage":
-        hasImage = true; bodyFrame = bodyFrame ?? n.frame
-      case "AXButton":
-        if n.desc == "프로필" { profile = n.frame }
-      default: break
+func messages(rows: [AXUIElement]) -> [Message] { fill(rows.compactMap(parseRow)) }
+
+/// 방을 처음 열 때: 아래 행부터 읽다가 시간 한도를 넘으면 멈춘다. 읽은 행 수도 돌려준다.
+/// 광고방처럼 카톡이 느려지는 방에서 화면을 오래 비워 두지 않으려고.
+func recentMessages(rows: [AXUIElement], limit: Int, budget: TimeInterval) -> (msgs: [Message], read: Int) {
+  let start = Date()
+  var parsed: [Message] = [], read = 0
+  for row in rows.suffix(limit).reversed() {
+    if let m = parseRow(row) { parsed.append(m) }
+    read += 1
+    if Date().timeIntervalSince(start) > budget { break }
+  }
+  return (fill(parsed.reversed()), read)
+}
+
+/// 행 하나를 메시지로. 이어서 보낸 메시지의 빈 이름·시간은 fill()이 채운다
+func parseRow(_ row: AXUIElement) -> Message? {
+  guard let cellEl = kids(row).first else { return nil }
+  let all = kids(cellEl)
+  // 카드 여러 장이 한 행에 펼쳐진 광고 메시지는 요소가 20개를 넘는다. 앞쪽 프로필·이름·시간만 읽고 본문은 첨부처럼 표시한다
+  let rich = all.count > 10
+  let items = (rich ? Array(all.prefix(3)) : all).map(node)
+  var time = "", bodies: [String] = [], bodyFrame: CGRect?, hasImage = false, unread = 0, cards = rich
+  var profile: CGRect?, texts: [Node] = []
+  for n in items {
+    switch n.role {
+    case "AXStaticText":
+      // 아직 안 읽은 사람이 있으면 "8\n11:58"처럼 안 읽은 수가 시간 앞에 붙는다
+      let lines = n.value.split(separator: "\n").map(String.init)
+      let last = lines.last ?? ""
+      if isTime(last) {
+        time = last
+        if lines.count > 1, let u = Int(lines[0]) { unread = u }
+      } else if let u = Int(n.value) {
+        unread = u   // 시간 없이 숫자만 따로 붙는 경우 (사진 등)
+      } else if !n.value.isEmpty {
+        texts.append(n)
       }
+    case "AXTextArea":
+      bodies.append(n.value); bodyFrame = bodyFrame ?? n.frame
+    case "AXScrollArea":
+      // 옆으로 넘기는 카드 메시지(광고 채널)는 이름 없는 스크롤 영역 하나에 카드마다 글·이미지·버튼이 들어 있다 (6장이면 48개).
+      // 이런 방은 카톡이 요청 하나에 0.25초씩 걸려 하나씩 읽으면 메시지 하나에 10초가 넘으므로, 개수만 보고 첨부처럼 표시한다
+      let inner = kids(n.el)
+      if n.id.isEmpty && inner.count > 4 { cards = true }
+      else { bodies.append(contentsOf: inner.compactMap { str($0, "AXValue") }.filter { !$0.isEmpty }) }
+      bodyFrame = bodyFrame ?? n.frame
+    case "AXImage":
+      hasImage = true; bodyFrame = bodyFrame ?? n.frame
+    case "AXButton":
+      if n.desc == "프로필" { profile = n.frame }
+    default: break
     }
-    // 보낸 사람 이름은 프로필 사진 바로 오른쪽 위에 있는 글자뿐이다.
-    // 그 밖의 글자(답장 표시 등)는 이름으로 오인하지 않도록 본문 앞에 붙인다.
-    let nameNode = profile.flatMap { p in
-      texts.first { abs($0.frame.minX - p.maxX) < 30 && abs($0.frame.minY - p.minY) < 25 }
-    }
-    let sender = nameNode?.value ?? ""
-    let extras = texts.filter { $0.el != nameNode?.el }.map(\.value)
-    bodies.insert(contentsOf: extras, at: 0)
-    let hasProfile = profile != nil
-    // 같은 사람이 같은 분에 연달아 보낸 메시지는 마지막 것에만 시간이 붙는다.
-    // 그래서 시간이 없어도 말풍선(글·사진)이 있으면 메시지로 보고, 날짜 구분선처럼 말풍선이 없는 행만 건너뛴다.
-    if time.isEmpty && bodyFrame == nil { continue }
-    var body = bodies.joined(separator: "\n")
-    if body.isEmpty { body = (hasImage ? "▣ 사진·이모티콘" : "▣ 첨부") + " · Ctrl+O로 보기" }
-    // 내 메시지는 오른쪽 정렬: 말풍선 오른쪽 끝이 셀 오른쪽 끝에 붙어 있다
-    let cellFrame = node(cellEl).frame
-    let mine = !hasProfile && sender.isEmpty && bodyFrame.map { cellFrame.maxX - $0.maxX < 40 } == true
-    if !sender.isEmpty { lastSender = sender }
-    result.append(Message(sender: mine ? "나" : (sender.isEmpty ? lastSender : sender), time: time, body: body, mine: mine, unread: unread))
+  }
+  // 보낸 사람 이름은 프로필 사진 바로 오른쪽 위에 있는 글자뿐이다.
+  // 그 밖의 글자(답장 표시 등)는 이름으로 오인하지 않도록 본문 앞에 붙인다.
+  let nameNode = profile.flatMap { p in
+    texts.first { abs($0.frame.minX - p.maxX) < 30 && abs($0.frame.minY - p.minY) < 25 }
+  }
+  let sender = nameNode?.value ?? ""
+  let extras = texts.filter { $0.el != nameNode?.el }.map(\.value)
+  bodies.insert(contentsOf: extras, at: 0)
+  let hasProfile = profile != nil
+  // 같은 사람이 같은 분에 연달아 보낸 메시지는 마지막 것에만 시간이 붙는다.
+  // 그래서 시간이 없어도 말풍선(글·사진)이 있으면 메시지로 보고, 날짜 구분선처럼 말풍선이 없는 행만 건너뛴다.
+  if time.isEmpty && bodyFrame == nil && !cards { return nil }
+  if cards { bodies.append("▣ 카드 메시지 · Ctrl+O로 보기") }
+  var body = bodies.joined(separator: "\n")
+  if body.isEmpty { body = (hasImage ? "▣ 사진·이모티콘" : "▣ 첨부") + " · Ctrl+O로 보기" }
+  // 내 메시지는 오른쪽 정렬: 말풍선 오른쪽 끝이 셀 오른쪽 끝에 붙어 있다 (셀 위치는 필요할 때만 읽는다)
+  let mine = !hasProfile && sender.isEmpty && bodyFrame.map { node(cellEl).frame.maxX - $0.maxX < 40 } == true
+  return Message(sender: mine ? "나" : sender, time: time, body: body, mine: mine, unread: unread)
+}
+
+/// 이어서 보낸 메시지는 이름이 앞 메시지에, 시간이 같은 묶음의 마지막 메시지에만 붙어 있어 채워 넣는다
+func fill(_ msgs: [Message]) -> [Message] {
+  var result = msgs, lastSender = ""
+  for i in result.indices where !result[i].mine {
+    if result[i].sender.isEmpty { result[i].sender = lastSender } else { lastSender = result[i].sender }
   }
   // 시간이 빠진 메시지에는 같은 묶음의 마지막 메시지 시간을 붙인다
   var carry = ""
@@ -738,6 +781,13 @@ var scrollBack = 0                   // 대화 칸을 맨 아래에서 몇 줄 �
 var lastChatLines = 0                // 직전에 그린 대화 줄 수 (새 메시지가 와도 보던 위치를 유지하려고)
 var newBelow = false                 // 올려 보는 동안 아래에 새 메시지가 왔는지
 var listRows = 30                    // 왼쪽 목록에 읽어 둘 방 수 (화면 줄 수의 배수)
+var skippedRows = 0                  // 방을 열 때 읽지 않고 건너뛴 위쪽 대화 행 수
+/// 방을 처음 열 때는 최근 행만 읽는다. 광고방처럼 카드형 메시지가 많은 방은 전체를 읽으면 몇 초씩 걸린다
+let initialRows = 40
+/// 광고방: 미리보기가 "(광고)"로 시작한 적 있는 방.
+/// 카톡 목록에는 채널 방과 1:1 방을 가르는 표시가 없어서, 한 번 본 것을 기억해 두고 흐리게 그린다
+let adRoomsFile = configDir.appendingPathComponent("ad-rooms")
+var adRooms = Set(((try? String(contentsOf: adRoomsFile, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init))
 
 func setStatus(_ s: String) { locked { status = s; dirty = true } }
 
@@ -757,7 +807,7 @@ func refreshOnce() {
       let sig = chatSignature(rows)
       if sig != chatSig {
         // 예전 메시지를 불러와 행이 많아도, 새로고침은 마지막 30행만 읽고 이어 붙인다 (전체를 읽으면 몇 초씩 걸린다)
-        let msgs = messages(rows: Array(rows.suffix(30)))
+        let msgs = recentMessages(rows: rows, limit: 30, budget: 1.5).msgs
         chatSig = sig
         locked { if let cw = currentWin, CFEqual(cw, win) { chat = merge(chat, msgs); dirty = true } }
       }
@@ -788,6 +838,12 @@ func refreshOnce() {
     }
     list = fresh
     listSig = sig; lastLimit = limit
+    let added = locked { fresh.filter { $0.last.hasPrefix("(광고)") && adRooms.insert($0.name).inserted } }
+    if !added.isEmpty {
+      let all = locked { adRooms.sorted().joined(separator: "\n") }
+      try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+      try? all.write(to: adRoomsFile, atomically: true, encoding: .utf8)
+    }
     nextFullList = Date().addingTimeInterval(15)
   }
   // 목록 밖의 이름은 한 번에 30줄씩 훑어 둔다 (/검색용). 한 바퀴 돌면 60초 쉰다.
@@ -860,6 +916,19 @@ func loadOlder(page: Int) {
   guard let win = locked({ currentWin }), !locked({ loadingOlder }) else { return }
   locked { loadingOlder = true; status = "이전 메시지 불러오는 중…"; dirty = true }
   defer { locked { loadingOlder = false } }
+  // 열 때 건너뛴 위쪽 행이 있으면 카톡 창을 스크롤하기 전에 그것부터 읽는다
+  if locked({ skippedRows }) > 0 {
+    let msgs = messages(rows: chatRows(win))
+    locked {
+      guard let cw = currentWin, CFEqual(cw, win) else { return }
+      let old = chat.count
+      chat = merge(chat, msgs); skippedRows = 0
+      prependedOlder = true; pendingScrollUp = page
+      status = "이전 메시지 \(max(0, chat.count - old))개를 더 불러왔습니다."
+      dirty = true
+    }
+    return
+  }
   guard let scroll = kids(win).first(where: { role($0) == "AXScrollArea" }),
         let bar = kids(scroll).first(where: { role($0) == "AXScrollBar" }) else {
     setStatus("이전 메시지를 불러올 수 없습니다."); return
@@ -903,6 +972,7 @@ func openRoom(_ name: String) {
     return (currentWin, openedByUs, nameIndex.firstIndex(of: name))
   }
   if hint == -1 { return }
+  trace("ax 큐에서 시작")
   if let prev { closeOurs(prev, prevOurs) }
   locked { currentWin = nil; currentName = nil; chat = [] }
   let existed = roomWindow(name) != nil
@@ -911,13 +981,26 @@ func openRoom(_ name: String) {
     return
   }
   if !existed { placeRoomWindow(win) }
-  let msgs = messages(win)
+  trace("창 위치 맞춤")
+  let rows = chatRows(win)
+  trace("대화 행 목록 (\(rows.count)행)")
+  var (msgs, read) = recentMessages(rows: rows, limit: initialRows, budget: 1.5)
+  trace("최근 \(read)행 읽음")
+  // 중간부터 읽으면 첫 묶음은 보낸 사람 이름이 없는 행으로 시작한다. 건너뛴 위쪽 행을 거꾸로 하나씩 읽어 이름을 찾아 채운다
+  if rows.count > read, msgs.first.map({ !$0.mine && $0.sender.isEmpty }) == true {
+    let above = rows.dropLast(read).suffix(10).reversed()
+    if let sender = above.lazy.compactMap({ messages(rows: [$0]).last }).first(where: { $0.mine || !$0.sender.isEmpty }).flatMap({ $0.mine ? nil : $0.sender }) {
+      for k in msgs.indices { guard !msgs[k].mine, msgs[k].sender.isEmpty else { break }; msgs[k].sender = sender }
+    }
+  }
   locked {
     currentWin = win; currentName = name; openedByUs = !existed
+    skippedRows = rows.count - read
     scrollBack = 0; lastChatLines = 0; newBelow = false
     chat = msgs; busy = false; status = ""; dirty = true
     if let i = roomList.firstIndex(where: { $0.name == name }) { cursor = i }
   }
+  trace("메시지 읽기 끝 (\(msgs.count)개)")
   chatSig = ""; listSig = ""
 }
 
@@ -1157,8 +1240,9 @@ func draw() {
     let isOpen = r.name == currentName
     let marker = isOpen ? "\(orange)▸\(reset)" : " "
     let bg = i == cursor ? "\u{1B}[100m" : ""
-    let nameStyle = isOpen || r.unread > 0 ? bold : ""
-    left.append("\(marker)\(bg) \(nameStyle)\(name)\(reset)\(bg)\(orange)\(badge)\(reset)")
+    let isAd = adRooms.contains(r.name)
+    let nameStyle = isAd ? dim : isOpen || r.unread > 0 ? bold : ""
+    left.append("\(marker)\(bg) \(nameStyle)\(name)\(reset)\(bg)\(isAd ? dim : orange)\(badge)\(reset)")
   }
   if roomList.isEmpty { left = [" \(dim)\(fit("목록 읽는 중…", leftW - 1))\(reset)"] }
 
@@ -1393,6 +1477,7 @@ func enter() {
     locked { inputBuf = [] }
     ax.async { submit(text) }
   } else if let selected, selected != current {
+    traceStart = Date(); trace("Enter")
     ax.async { openRoom(selected) }
   }
 }
