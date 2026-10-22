@@ -61,7 +61,7 @@ func node(_ e: AXUIElement) -> Node {
 
 // MARK: - 카카오톡 연결
 
-let version = "1.3.2"
+let version = "1.3.3"
 if CommandLine.arguments.contains("--version") { print("nunchi \(version)"); exit(0) }
 
 // MARK: - 업데이트
@@ -689,11 +689,12 @@ func rawMode() {
   raw.c_lflag &= ~tcflag_t(ECHO | ICANON | ISIG | IEXTEN)
   raw.c_iflag &= ~tcflag_t(IXON | ICRNL)
   tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw)
-  out("\u{1B}[?1049h\u{1B}[?25h")
+  // 자동 줄바꿈(?7)을 끈다. 폭 계산이 한 칸이라도 어긋나면 줄이 넘쳐 화면 전체가 위로 밀리기 때문
+  out("\u{1B}[?1049h\u{1B}[?7l\u{1B}[2J\u{1B}[?25h")
 }
 func restore() {
   tcsetattr(STDIN_FILENO, TCSAFLUSH, &original)
-  out("\u{1B}[?1049l")
+  out("\u{1B}[?7h\u{1B}[?1049l")
 }
 func out(_ s: String) { FileHandle.standardOutput.write(s.data(using: .utf8)!) }
 var fixedSize: (rows: Int, cols: Int)?   // 데모처럼 터미널 크기와 상관없이 그릴 때
@@ -736,7 +737,7 @@ let idleSeconds = Double(ProcessInfo.processInfo.environment["NUNCHI_IDLE"] ?? "
 var scrollBack = 0                   // 대화 칸을 맨 아래에서 몇 줄 위로 올려 보고 있는지
 var lastChatLines = 0                // 직전에 그린 대화 줄 수 (새 메시지가 와도 보던 위치를 유지하려고)
 var newBelow = false                 // 올려 보는 동안 아래에 새 메시지가 왔는지
-var listRows = 30                    // 왼쪽 목록에 보이는 줄 수
+var listRows = 30                    // 왼쪽 목록에 읽어 둘 방 수 (화면 줄 수의 배수)
 
 func setStatus(_ s: String) { locked { status = s; dirty = true } }
 
@@ -1131,13 +1132,19 @@ func drawBoss(rows: Int, cols: Int) -> String {
 
 // MARK: - 그리기 (메인 스레드, lock 안에서 호출)
 
+var lastDrawSize = (rows: 0, cols: 0)
 func draw() {
   let (rows, cols) = termSize()
+  // 창 크기가 바뀌면 예전 배치가 남지 않게 한 번 지운다
+  if (rows, cols) != lastDrawSize { out("\u{1B}[2J"); lastDrawSize = (rows, cols) }
   if bossMode { out(drawBoss(rows: rows, cols: cols)); dirty = false; return }
   let leftW = min(30, cols / 3)
   let rightW = cols - leftW - 3
   let bodyH = rows - 3      // 헤더 1줄 + 입력 구분선 1줄 + 입력 1줄
-  listRows = bodyH
+  // 목록은 화면 단위로 읽는다. 커서가 읽어 둔 끝에 반 화면 안쪽으로 다가가면 한 화면 더 읽는다
+  // (화면 줄 수만 읽으면 ↓가 화면 맨 아래 방에서 멈춘다)
+  let wantRows = ((cursor + bodyH / 2) / max(bodyH, 1) + 1) * max(bodyH, 1)
+  if wantRows != listRows { listRows = wantRows; if !demo { ax.async { refreshOnce() } } }
 
   // 왼쪽: 채팅방 목록 (선택 위치가 보이도록 스크롤)
   let top = max(0, min(cursor - bodyH / 2, roomList.count - bodyH))
@@ -1320,7 +1327,7 @@ func handle(_ bytes: [UInt8]) {
         locked {
           switch seq {
           case "A": cursor = max(0, cursor - 1)                          // ↑ 방 고르기
-          case "B": cursor = min(roomList.count - 1, cursor + 1)         // ↓
+          case "B": cursor = max(0, min(roomList.count - 1, cursor + 1)) // ↓
           case "1;2A", "5~":                                             // Shift+↑ / PageUp: 대화 위로
             if atTop && currentName != nil { let p = seq == "5~" ? page : 3; ax.async { loadOlder(page: p) } }
             else { scrollBack += seq == "5~" ? page : 3 }
@@ -1453,6 +1460,7 @@ while true {
       locked { lastIdleSecond = Int(idle); dirty = true }   // 카운트다운 갱신
     }
     if locked({ bossMode }) { locked { dirty = true } }   // 보스 화면 애니메이션
+    if termSize() != locked({ lastDrawSize }) { locked { dirty = true } }   // 창 크기 변경
     locked { if dirty { draw() } }
   }
 }
